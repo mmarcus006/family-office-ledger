@@ -123,23 +123,7 @@ class PostgresDatabase:
                     FOREIGN KEY (reverses_transaction_id) REFERENCES transactions(id)
                 );
 
-                -- Entries table (for transaction entries)
-                CREATE TABLE IF NOT EXISTS entries (
-                    id TEXT PRIMARY KEY,
-                    transaction_id TEXT NOT NULL,
-                    account_id TEXT NOT NULL,
-                    debit_amount TEXT NOT NULL,
-                    debit_currency TEXT NOT NULL,
-                    credit_amount TEXT NOT NULL,
-                    credit_currency TEXT NOT NULL,
-                    memo TEXT NOT NULL DEFAULT '',
-                    tax_lot_id TEXT,
-                    FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
-                    FOREIGN KEY (account_id) REFERENCES accounts(id),
-                    FOREIGN KEY (tax_lot_id) REFERENCES tax_lots(id)
-                );
-
-                -- Tax lots table
+                -- Tax lots table (must be before entries due to FK)
                 CREATE TABLE IF NOT EXISTS tax_lots (
                     id TEXT PRIMARY KEY,
                     position_id TEXT NOT NULL,
@@ -157,6 +141,22 @@ class PostgresDatabase:
                     reference TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     FOREIGN KEY (position_id) REFERENCES positions(id)
+                );
+
+                -- Entries table (for transaction entries)
+                CREATE TABLE IF NOT EXISTS entries (
+                    id TEXT PRIMARY KEY,
+                    transaction_id TEXT NOT NULL,
+                    account_id TEXT NOT NULL,
+                    debit_amount TEXT NOT NULL,
+                    debit_currency TEXT NOT NULL,
+                    credit_amount TEXT NOT NULL,
+                    credit_currency TEXT NOT NULL,
+                    memo TEXT NOT NULL DEFAULT '',
+                    tax_lot_id TEXT,
+                    FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+                    FOREIGN KEY (account_id) REFERENCES accounts(id),
+                    FOREIGN KEY (tax_lot_id) REFERENCES tax_lots(id)
                 );
 
                 -- Indexes for common queries
