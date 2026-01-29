@@ -336,3 +336,54 @@ class CurrencyService(ABC):
         base_currency: str,
     ) -> Money:
         pass
+
+
+class ExpenseService(ABC):
+    @abstractmethod
+    def categorize_transaction(
+        self,
+        transaction_id: UUID,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        vendor_id: UUID | None = None,
+    ) -> Transaction:
+        pass
+
+    @abstractmethod
+    def auto_categorize(self, transaction: Transaction) -> str | None:
+        pass
+
+    @abstractmethod
+    def get_expense_summary(
+        self,
+        entity_ids: list[UUID] | None,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def get_expenses_by_category(
+        self,
+        entity_ids: list[UUID] | None,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, Money]:
+        pass
+
+    @abstractmethod
+    def get_expenses_by_vendor(
+        self,
+        entity_ids: list[UUID] | None,
+        start_date: date,
+        end_date: date,
+    ) -> dict[UUID, Money]:
+        pass
+
+    @abstractmethod
+    def detect_recurring_expenses(
+        self,
+        entity_id: UUID,
+        lookback_months: int = 3,
+    ) -> list[dict[str, Any]]:
+        pass

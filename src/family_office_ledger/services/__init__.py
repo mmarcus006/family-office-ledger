@@ -3,9 +3,11 @@ from family_office_ledger.services.currency import (
     CurrencyServiceImpl,
     ExchangeRateNotFoundError,
 )
+from family_office_ledger.services.expense import ExpenseServiceImpl
 from family_office_ledger.services.interfaces import (
     CorporateActionService,
     CurrencyService,
+    ExpenseService,
     LedgerService,
     LotMatchingService,
     MatchResult,
@@ -82,6 +84,8 @@ __all__ = [
     "CurrencyService",
     "CurrencyServiceImpl",
     "ExchangeRateNotFoundError",
+    "ExpenseService",
+    "ExpenseServiceImpl",
     "Form8949",
     "Form8949Box",
     "Form8949Entry",
