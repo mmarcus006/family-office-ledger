@@ -1,6 +1,7 @@
 from family_office_ledger.repositories.interfaces import (
     AccountRepository,
     EntityRepository,
+    HouseholdRepository,
     PositionRepository,
     ReconciliationSessionRepository,
     SecurityRepository,
@@ -12,6 +13,7 @@ from family_office_ledger.repositories.sqlite import (
     SQLiteAccountRepository,
     SQLiteDatabase,
     SQLiteEntityRepository,
+    SQLiteHouseholdRepository,
     SQLitePositionRepository,
     SQLiteReconciliationSessionRepository,
     SQLiteSecurityRepository,
@@ -23,6 +25,7 @@ from family_office_ledger.repositories.sqlite import (
 __all__ = [
     "AccountRepository",
     "EntityRepository",
+    "HouseholdRepository",
     "PositionRepository",
     "ReconciliationSessionRepository",
     "SecurityRepository",
@@ -32,6 +35,7 @@ __all__ = [
     "SQLiteAccountRepository",
     "SQLiteDatabase",
     "SQLiteEntityRepository",
+    "SQLiteHouseholdRepository",
     "SQLitePositionRepository",
     "SQLiteReconciliationSessionRepository",
     "SQLiteSecurityRepository",
@@ -46,6 +50,7 @@ try:
         PostgresAccountRepository,
         PostgresDatabase,
         PostgresEntityRepository,
+        PostgresHouseholdRepository,
         PostgresPositionRepository,
         PostgresReconciliationSessionRepository,
         PostgresSecurityRepository,
@@ -57,6 +62,7 @@ try:
         "PostgresAccountRepository",
         "PostgresDatabase",
         "PostgresEntityRepository",
+        "PostgresHouseholdRepository",
         "PostgresPositionRepository",
         "PostgresReconciliationSessionRepository",
         "PostgresSecurityRepository",
@@ -64,5 +70,4 @@ try:
         "PostgresTransactionRepository",
     ]
 except ImportError:
-    # psycopg2 not installed, PostgreSQL repositories not available
     pass

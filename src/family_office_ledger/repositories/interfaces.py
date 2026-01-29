@@ -6,6 +6,8 @@ from uuid import UUID
 from family_office_ledger.domain.budgets import Budget, BudgetLineItem
 from family_office_ledger.domain.entities import Account, Entity, Position, Security
 from family_office_ledger.domain.exchange_rates import ExchangeRate
+from family_office_ledger.domain.households import Household, HouseholdMember
+from family_office_ledger.domain.ownership import EntityOwnership
 from family_office_ledger.domain.reconciliation import ReconciliationSession
 from family_office_ledger.domain.transactions import TaxLot, Transaction
 from family_office_ledger.domain.vendors import Vendor
@@ -38,6 +40,64 @@ class EntityRepository(ABC):
 
     @abstractmethod
     def delete(self, entity_id: UUID) -> None:
+        pass
+
+
+class HouseholdRepository(ABC):
+    @abstractmethod
+    def add(self, household: Household) -> None:
+        pass
+
+    @abstractmethod
+    def get(self, household_id: UUID) -> Household | None:
+        pass
+
+    @abstractmethod
+    def get_by_name(self, name: str) -> Household | None:
+        pass
+
+    @abstractmethod
+    def list_all(self) -> Iterable[Household]:
+        pass
+
+    @abstractmethod
+    def list_active(self) -> Iterable[Household]:
+        pass
+
+    @abstractmethod
+    def update(self, household: Household) -> None:
+        pass
+
+    @abstractmethod
+    def delete(self, household_id: UUID) -> None:
+        pass
+
+    @abstractmethod
+    def add_member(self, member: HouseholdMember) -> None:
+        pass
+
+    @abstractmethod
+    def get_member(self, member_id: UUID) -> HouseholdMember | None:
+        pass
+
+    @abstractmethod
+    def list_members(
+        self, household_id: UUID, as_of_date: date | None = None
+    ) -> Iterable[HouseholdMember]:
+        pass
+
+    @abstractmethod
+    def list_households_for_entity(
+        self, entity_id: UUID, as_of_date: date | None = None
+    ) -> Iterable[HouseholdMember]:
+        pass
+
+    @abstractmethod
+    def update_member(self, member: HouseholdMember) -> None:
+        pass
+
+    @abstractmethod
+    def remove_member(self, member_id: UUID) -> None:
         pass
 
 
@@ -388,4 +448,38 @@ class BudgetRepository(ABC):
 
     @abstractmethod
     def delete_line_item(self, line_item_id: UUID) -> None:
+        pass
+
+
+class EntityOwnershipRepository(ABC):
+    @abstractmethod
+    def add(self, ownership: EntityOwnership) -> None:
+        pass
+
+    @abstractmethod
+    def get(self, ownership_id: UUID) -> EntityOwnership | None:
+        pass
+
+    @abstractmethod
+    def list_by_owner(
+        self, owner_entity_id: UUID, as_of_date: date | None = None
+    ) -> Iterable[EntityOwnership]:
+        pass
+
+    @abstractmethod
+    def list_by_owned(
+        self, owned_entity_id: UUID, as_of_date: date | None = None
+    ) -> Iterable[EntityOwnership]:
+        pass
+
+    @abstractmethod
+    def list_active_as_of_date(self, as_of_date: date) -> Iterable[EntityOwnership]:
+        pass
+
+    @abstractmethod
+    def update(self, ownership: EntityOwnership) -> None:
+        pass
+
+    @abstractmethod
+    def delete(self, ownership_id: UUID) -> None:
         pass

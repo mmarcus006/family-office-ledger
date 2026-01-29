@@ -10,18 +10,26 @@ from family_office_ledger.domain.exchange_rates import ExchangeRate, ExchangeRat
 from family_office_ledger.domain.reconciliation import ReconciliationMatchStatus
 from family_office_ledger.domain.transfer_matching import TransferMatchStatus
 from family_office_ledger.domain.vendors import Vendor
+from family_office_ledger.domain.households import Household, HouseholdMember
+from family_office_ledger.domain.ownership import EntityOwnership, SelfOwnershipError
 from family_office_ledger.repositories.sqlite import (
     SQLiteAccountRepository,
     SQLiteBudgetRepository,
     SQLiteDatabase,
+    SQLiteEntityOwnershipRepository,
     SQLiteEntityRepository,
     SQLiteExchangeRateRepository,
+    SQLiteHouseholdRepository,
     SQLitePositionRepository,
     SQLiteReconciliationSessionRepository,
     SQLiteSecurityRepository,
     SQLiteTaxLotRepository,
     SQLiteTransactionRepository,
     SQLiteVendorRepository,
+)
+from family_office_ledger.services.ownership_graph import (
+    CycleDetectedError,
+    OwnershipGraphService,
 )
 from family_office_ledger.services.budget import BudgetServiceImpl
 from family_office_ledger.services.currency import (
@@ -2007,6 +2015,449 @@ def cmd_budget_alerts(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_household_list(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        household_repo = SQLiteHouseholdRepository(db)
+
+        households = list(household_repo.list_all())
+        if not households:
+            print("No households found.")
+            return 0
+
+        print("Households:")
+        print("=" * 70)
+        for h in households:
+            status = "Active" if h.is_active else "Inactive"
+            print(f"  {h.id}")
+            print(f"    Name: {h.name}")
+            print(f"    Status: {status}")
+            if h.primary_contact_entity_id:
+                print(f"    Primary Contact: {h.primary_contact_entity_id}")
+            print()
+
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_household_create(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        household_repo = SQLiteHouseholdRepository(db)
+
+        primary_contact = UUID(args.primary_contact) if args.primary_contact else None
+        household = Household(name=args.name, primary_contact_entity_id=primary_contact)
+        household_repo.add(household)
+
+        print(f"Created household: {household.id}")
+        print(f"  Name: {household.name}")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_household_add_member(args: argparse.Namespace) -> int:
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        household_repo = SQLiteHouseholdRepository(db)
+        entity_repo = SQLiteEntityRepository(db)
+
+        household = household_repo.get(UUID(args.household_id))
+        if household is None:
+            print(f"Error: Household {args.household_id} not found")
+            return 1
+
+        entity = entity_repo.get(UUID(args.entity_id))
+        if entity is None:
+            print(f"Error: Entity {args.entity_id} not found")
+            return 1
+
+        start_date = (
+            dt.strptime(args.start_date, "%Y-%m-%d").date() if args.start_date else None
+        )
+
+        member = HouseholdMember(
+            household_id=UUID(args.household_id),
+            entity_id=UUID(args.entity_id),
+            role=args.role,
+            display_name=args.display_name,
+            effective_start_date=start_date,
+        )
+        household_repo.add_member(member)
+
+        print(f"Added member {entity.name} to household {household.name}")
+        print(f"  Member ID: {member.id}")
+        print(f"  Role: {args.role or 'not set'}")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_household_members(args: argparse.Namespace) -> int:
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        household_repo = SQLiteHouseholdRepository(db)
+        entity_repo = SQLiteEntityRepository(db)
+
+        household = household_repo.get(UUID(args.household_id))
+        if household is None:
+            print(f"Error: Household {args.household_id} not found")
+            return 1
+
+        as_of = dt.strptime(args.as_of, "%Y-%m-%d").date() if args.as_of else None
+        members = list(household_repo.list_members(UUID(args.household_id), as_of))
+
+        if not members:
+            print(f"No members in household {household.name}")
+            return 0
+
+        print(f"Members of {household.name}:")
+        print("=" * 70)
+        for m in members:
+            entity = entity_repo.get(m.entity_id)
+            entity_name = entity.name if entity else "Unknown"
+            print(f"  {m.id}")
+            print(f"    Entity: {entity_name} ({m.entity_id})")
+            print(f"    Role: {m.role or 'not set'}")
+            if m.display_name:
+                print(f"    Display Name: {m.display_name}")
+            if m.effective_start_date:
+                print(
+                    f"    Effective: {m.effective_start_date} - {m.effective_end_date or 'present'}"
+                )
+            print()
+
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_household_net_worth(args: argparse.Namespace) -> int:
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        household_repo = SQLiteHouseholdRepository(db)
+        ownership_repo = SQLiteEntityOwnershipRepository(db)
+        entity_repo = SQLiteEntityRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        transaction_repo = SQLiteTransactionRepository(db)
+
+        household = household_repo.get(UUID(args.household_id))
+        if household is None:
+            print(f"Error: Household {args.household_id} not found")
+            return 1
+
+        as_of = (
+            dt.strptime(args.as_of, "%Y-%m-%d").date()
+            if args.as_of
+            else dt.now().date()
+        )
+
+        service = OwnershipGraphService(
+            ownership_repo, household_repo, entity_repo, account_repo, transaction_repo
+        )
+        result = service.household_look_through_net_worth(
+            UUID(args.household_id), as_of
+        )
+
+        print(f"Look-Through Net Worth: {household.name}")
+        print(f"As of: {as_of}")
+        print("=" * 70)
+        print(f"  Total Assets:      ${result['total_assets']:,.2f}")
+        print(f"  Total Liabilities: ${result['total_liabilities']:,.2f}")
+        print(f"  Net Worth:         ${result['net_worth']:,.2f}")
+
+        if args.detail and result["detail"]:
+            print()
+            print("Detail:")
+            print("-" * 70)
+            for d in result["detail"]:
+                print(f"  {d['entity_name']} / {d['account_name']}")
+                print(
+                    f"    Direct: ${d['direct_balance']:,.2f} × {float(d['effective_fraction']):.1%} = ${d['weighted_balance']:,.2f}"
+                )
+
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_ownership_list(args: argparse.Namespace) -> int:
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        ownership_repo = SQLiteEntityOwnershipRepository(db)
+        entity_repo = SQLiteEntityRepository(db)
+
+        as_of = (
+            dt.strptime(args.as_of, "%Y-%m-%d").date()
+            if args.as_of
+            else dt.now().date()
+        )
+
+        if args.owner_id:
+            edges = list(ownership_repo.list_by_owner(UUID(args.owner_id), as_of))
+        elif args.owned_id:
+            edges = list(ownership_repo.list_by_owned(UUID(args.owned_id), as_of))
+        else:
+            edges = list(ownership_repo.list_active_as_of_date(as_of))
+
+        if not edges:
+            print("No ownership edges found.")
+            return 0
+
+        print(f"Ownership Edges (as of {as_of}):")
+        print("=" * 70)
+        for e in edges:
+            owner = entity_repo.get(e.owner_entity_id)
+            owned = entity_repo.get(e.owned_entity_id)
+            owner_name = owner.name if owner else str(e.owner_entity_id)
+            owned_name = owned.name if owned else str(e.owned_entity_id)
+            print(
+                f"  {owner_name} --[{float(e.ownership_fraction):.1%}]--> {owned_name}"
+            )
+            print(f"    ID: {e.id}")
+            print(
+                f"    Effective: {e.effective_start_date} - {e.effective_end_date or 'present'}"
+            )
+            print()
+
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_ownership_create(args: argparse.Namespace) -> int:
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        ownership_repo = SQLiteEntityOwnershipRepository(db)
+        household_repo = SQLiteHouseholdRepository(db)
+        entity_repo = SQLiteEntityRepository(db)
+
+        owner = entity_repo.get(UUID(args.owner_id))
+        if owner is None:
+            print(f"Error: Owner entity {args.owner_id} not found")
+            return 1
+
+        owned = entity_repo.get(UUID(args.owned_id))
+        if owned is None:
+            print(f"Error: Owned entity {args.owned_id} not found")
+            return 1
+
+        start_date = dt.strptime(args.start_date, "%Y-%m-%d").date()
+
+        ownership = EntityOwnership(
+            owner_entity_id=UUID(args.owner_id),
+            owned_entity_id=UUID(args.owned_id),
+            ownership_fraction=Decimal(args.fraction),
+            effective_start_date=start_date,
+            ownership_type=args.type or "beneficial",
+        )
+
+        service = OwnershipGraphService(ownership_repo, household_repo)
+        service.validate_ownership_edge(ownership)
+
+        ownership_repo.add(ownership)
+
+        print(f"Created ownership edge: {ownership.id}")
+        print(
+            f"  {owner.name} --[{float(ownership.ownership_fraction):.1%}]--> {owned.name}"
+        )
+        return 0
+
+    except SelfOwnershipError as e:
+        print(f"Error: {e}")
+        return 1
+    except CycleDetectedError as e:
+        print(f"Error: Would create cycle - {e}")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_ownership_delete(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        ownership_repo = SQLiteEntityOwnershipRepository(db)
+
+        ownership = ownership_repo.get(UUID(args.ownership_id))
+        if ownership is None:
+            print(f"Error: Ownership edge {args.ownership_id} not found")
+            return 1
+
+        ownership_repo.delete(UUID(args.ownership_id))
+        print(f"Deleted ownership edge: {args.ownership_id}")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_ownership_tree(args: argparse.Namespace) -> int:
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        ownership_repo = SQLiteEntityOwnershipRepository(db)
+        household_repo = SQLiteHouseholdRepository(db)
+        entity_repo = SQLiteEntityRepository(db)
+
+        entity = entity_repo.get(UUID(args.entity_id))
+        if entity is None:
+            print(f"Error: Entity {args.entity_id} not found")
+            return 1
+
+        as_of = (
+            dt.strptime(args.as_of, "%Y-%m-%d").date()
+            if args.as_of
+            else dt.now().date()
+        )
+
+        service = OwnershipGraphService(ownership_repo, household_repo)
+        effective = service.compute_effective_ownership(UUID(args.entity_id), as_of)
+
+        print(f"Allocation Tree for {entity.name} (as of {as_of}):")
+        print("=" * 70)
+
+        for eo in effective.values():
+            target = entity_repo.get(eo.entity_id)
+            target_name = target.name if target else str(eo.entity_id)
+            indent = "  " * (len(eo.path) - 1)
+            print(f"{indent}{target_name}: {float(eo.effective_fraction):.1%}")
+
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_ownership_look_through(args: argparse.Namespace) -> int:
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        ownership_repo = SQLiteEntityOwnershipRepository(db)
+        household_repo = SQLiteHouseholdRepository(db)
+        entity_repo = SQLiteEntityRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        transaction_repo = SQLiteTransactionRepository(db)
+
+        entity = entity_repo.get(UUID(args.entity_id))
+        if entity is None:
+            print(f"Error: Entity {args.entity_id} not found")
+            return 1
+
+        as_of = (
+            dt.strptime(args.as_of, "%Y-%m-%d").date()
+            if args.as_of
+            else dt.now().date()
+        )
+
+        service = OwnershipGraphService(
+            ownership_repo, household_repo, entity_repo, account_repo, transaction_repo
+        )
+        result = service.beneficial_owner_look_through_net_worth(
+            UUID(args.entity_id), as_of
+        )
+
+        print(f"Look-Through Net Worth: {entity.name}")
+        print(f"As of: {as_of}")
+        print("=" * 70)
+        print(f"  Total Assets:      ${result['total_assets']:,.2f}")
+        print(f"  Total Liabilities: ${result['total_liabilities']:,.2f}")
+        print(f"  Net Worth:         ${result['net_worth']:,.2f}")
+
+        if args.detail and result["detail"]:
+            print()
+            print("Detail:")
+            print("-" * 70)
+            for d in result["detail"]:
+                print(f"  {d['entity_name']} / {d['account_name']}")
+                print(
+                    f"    Direct: ${d['direct_balance']:,.2f} × {float(d['effective_fraction']):.1%} = ${d['weighted_balance']:,.2f}"
+                )
+
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="fol",
@@ -2645,6 +3096,144 @@ def main(argv: list[str] | None = None) -> int:
         "--thresholds", help="Comma-separated thresholds (default: 80,90,100,110)"
     )
     budget_alerts_parser.set_defaults(func=cmd_budget_alerts)
+
+    # household command group
+    household_parser = subparsers.add_parser(
+        "household", help="Household management commands"
+    )
+    household_subparsers = household_parser.add_subparsers(
+        dest="household_command", help="Household subcommands"
+    )
+
+    # household list
+    household_list_parser = household_subparsers.add_parser(
+        "list", help="List all households"
+    )
+    household_list_parser.set_defaults(func=cmd_household_list)
+
+    # household create
+    household_create_parser = household_subparsers.add_parser(
+        "create", help="Create a new household"
+    )
+    household_create_parser.add_argument("--name", required=True, help="Household name")
+    household_create_parser.add_argument(
+        "--primary-contact", help="Primary contact entity ID"
+    )
+    household_create_parser.set_defaults(func=cmd_household_create)
+
+    # household add-member
+    household_add_member_parser = household_subparsers.add_parser(
+        "add-member", help="Add a member to a household"
+    )
+    household_add_member_parser.add_argument(
+        "--household-id", required=True, help="Household ID"
+    )
+    household_add_member_parser.add_argument(
+        "--entity-id", required=True, help="Entity ID to add"
+    )
+    household_add_member_parser.add_argument("--role", help="Member role (e.g., Head)")
+    household_add_member_parser.add_argument(
+        "--display-name", help="Display name for member"
+    )
+    household_add_member_parser.add_argument(
+        "--start-date", help="Effective start date (YYYY-MM-DD)"
+    )
+    household_add_member_parser.set_defaults(func=cmd_household_add_member)
+
+    # household members
+    household_members_parser = household_subparsers.add_parser(
+        "members", help="List members of a household"
+    )
+    household_members_parser.add_argument(
+        "--household-id", required=True, help="Household ID"
+    )
+    household_members_parser.add_argument("--as-of", help="As-of date (YYYY-MM-DD)")
+    household_members_parser.set_defaults(func=cmd_household_members)
+
+    # household net-worth
+    household_net_worth_parser = household_subparsers.add_parser(
+        "net-worth", help="Show look-through net worth for a household"
+    )
+    household_net_worth_parser.add_argument(
+        "--household-id", required=True, help="Household ID"
+    )
+    household_net_worth_parser.add_argument("--as-of", help="As-of date (YYYY-MM-DD)")
+    household_net_worth_parser.add_argument(
+        "--detail", action="store_true", help="Show detail by entity/account"
+    )
+    household_net_worth_parser.set_defaults(func=cmd_household_net_worth)
+
+    # ownership command group
+    ownership_parser = subparsers.add_parser(
+        "ownership", help="Ownership graph management commands"
+    )
+    ownership_subparsers = ownership_parser.add_subparsers(
+        dest="ownership_command", help="Ownership subcommands"
+    )
+
+    # ownership list
+    ownership_list_parser = ownership_subparsers.add_parser(
+        "list", help="List ownership edges"
+    )
+    ownership_list_parser.add_argument("--owner-id", help="Filter by owner entity ID")
+    ownership_list_parser.add_argument("--owned-id", help="Filter by owned entity ID")
+    ownership_list_parser.add_argument("--as-of", help="As-of date (YYYY-MM-DD)")
+    ownership_list_parser.set_defaults(func=cmd_ownership_list)
+
+    # ownership create
+    ownership_create_parser = ownership_subparsers.add_parser(
+        "create", help="Create an ownership edge"
+    )
+    ownership_create_parser.add_argument(
+        "--owner-id", required=True, help="Owner entity ID"
+    )
+    ownership_create_parser.add_argument(
+        "--owned-id", required=True, help="Owned entity ID"
+    )
+    ownership_create_parser.add_argument(
+        "--fraction", required=True, help="Ownership fraction (e.g., 0.5 for 50%)"
+    )
+    ownership_create_parser.add_argument(
+        "--start-date", required=True, help="Effective start date (YYYY-MM-DD)"
+    )
+    ownership_create_parser.add_argument(
+        "--type", help="Ownership type (beneficial, voting, economic)"
+    )
+    ownership_create_parser.set_defaults(func=cmd_ownership_create)
+
+    # ownership delete
+    ownership_delete_parser = ownership_subparsers.add_parser(
+        "delete", help="Delete an ownership edge"
+    )
+    ownership_delete_parser.add_argument(
+        "--ownership-id", required=True, help="Ownership edge ID to delete"
+    )
+    ownership_delete_parser.set_defaults(func=cmd_ownership_delete)
+
+    # ownership tree
+    ownership_tree_parser = ownership_subparsers.add_parser(
+        "tree", help="Show allocation tree from an entity"
+    )
+    ownership_tree_parser.add_argument(
+        "--entity-id", required=True, help="Root entity ID"
+    )
+    ownership_tree_parser.add_argument("--as-of", help="As-of date (YYYY-MM-DD)")
+    ownership_tree_parser.set_defaults(func=cmd_ownership_tree)
+
+    # ownership look-through
+    ownership_look_through_parser = ownership_subparsers.add_parser(
+        "look-through", help="Show look-through net worth for an entity"
+    )
+    ownership_look_through_parser.add_argument(
+        "--entity-id", required=True, help="Entity ID"
+    )
+    ownership_look_through_parser.add_argument(
+        "--as-of", help="As-of date (YYYY-MM-DD)"
+    )
+    ownership_look_through_parser.add_argument(
+        "--detail", action="store_true", help="Show detail by owned entity/account"
+    )
+    ownership_look_through_parser.set_defaults(func=cmd_ownership_look_through)
 
     args = parser.parse_args(argv)
 

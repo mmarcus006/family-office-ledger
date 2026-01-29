@@ -15,6 +15,7 @@ from family_office_ledger.domain.value_objects import (
     EntityType,
     Money,
     Quantity,
+    TaxTreatment,
 )
 
 
@@ -29,6 +30,11 @@ class Entity:
     is_active: bool = True
     created_at: datetime = field(default_factory=_utc_now)
     updated_at: datetime = field(default_factory=_utc_now)
+    tax_treatment: TaxTreatment | None = None
+    tax_id: str | None = None
+    tax_id_type: str | None = None
+    formation_date: date | None = None
+    jurisdiction: str | None = None
 
     def deactivate(self) -> None:
         self.is_active = False

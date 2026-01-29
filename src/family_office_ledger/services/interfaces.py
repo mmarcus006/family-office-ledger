@@ -313,6 +313,24 @@ class ReportingService(ABC):
     ) -> dict[str, Any]:
         pass
 
+    @abstractmethod
+    def household_net_worth_report(
+        self,
+        household_id: UUID,
+        as_of_date: date,
+        base_currency: str | None = None,
+    ) -> dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def ownership_weighted_net_worth_report(
+        self,
+        entity_id: UUID,
+        as_of_date: date,
+        base_currency: str | None = None,
+    ) -> dict[str, Any]:
+        pass
+
 
 class CurrencyService(ABC):
     @abstractmethod

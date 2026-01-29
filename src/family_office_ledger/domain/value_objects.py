@@ -41,6 +41,19 @@ class EntityType(str, Enum):
     PARTNERSHIP = "partnership"
     INDIVIDUAL = "individual"
     HOLDING_CO = "holding_co"
+    JOINT = "joint"
+    FOUNDATION = "foundation"
+    ESTATE = "estate"
+    S_CORP = "s_corp"
+    C_CORP = "c_corp"
+
+
+class TaxTreatment(str, Enum):
+    PASS_THROUGH = "pass_through"  # LLC, Partnership, S-Corp
+    C_CORP = "c_corp"
+    TAX_EXEMPT = "tax_exempt"  # Foundation, certain trusts
+    DISREGARDED = "disregarded"  # Single-member LLC
+    INDIVIDUAL = "individual"  # Individual taxation
 
 
 class AccountType(str, Enum):
@@ -263,6 +276,7 @@ __all__ = [
     "Currency",
     "LotSelection",
     "EntityType",
+    "TaxTreatment",
     "AccountType",
     "AccountSubType",
     "AssetClass",

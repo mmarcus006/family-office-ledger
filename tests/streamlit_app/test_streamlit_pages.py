@@ -218,15 +218,15 @@ class TestPageModulesExist:
         assert page_path.exists(), "12_Tax.py should exist"
 
     def test_all_pages_count(self) -> None:
-        """Test that all 12 pages exist."""
+        """Test that all 14 pages exist."""
         from pathlib import Path
 
         pages_dir = Path("src/family_office_ledger/streamlit_app/pages")
         pages = list(pages_dir.glob("*.py"))
         # Filter out __pycache__ and __init__.py
         pages = [p for p in pages if not p.name.startswith("__")]
-        assert len(pages) == 12, (
-            f"Expected 12 pages, found {len(pages)}: {[p.name for p in pages]}"
+        assert len(pages) == 14, (
+            f"Expected 14 pages, found {len(pages)}: {[p.name for p in pages]}"
         )
 
 

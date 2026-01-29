@@ -15,7 +15,8 @@ class EntityCreate(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=255)
     entity_type: str = Field(
-        ..., pattern=r"^(llc|trust|partnership|individual|holding_co)$"
+        ...,
+        pattern=r"^(llc|trust|partnership|individual|holding_co|joint|foundation|estate|s_corp|c_corp)$",
     )
     fiscal_year_end: date | None = None
 
@@ -721,3 +722,139 @@ class BudgetAlertsResponse(BaseModel):
     budget_id: UUID
     alerts: list[BudgetAlertResponse]
     total_alerts: int
+
+
+# Household Schemas
+class HouseholdCreate(BaseModel):
+    """Schema for creating a household."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(..., min_length=1, max_length=255)
+    primary_contact_entity_id: UUID | None = None
+
+
+class HouseholdResponse(BaseModel):
+    """Schema for household response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    primary_contact_entity_id: UUID | None
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class HouseholdMemberCreate(BaseModel):
+    """Schema for adding a household member."""
+
+    entity_id: UUID
+    role: str | None = None
+    display_name: str | None = None
+    effective_start_date: date | None = None
+    effective_end_date: date | None = None
+
+
+class HouseholdMemberResponse(BaseModel):
+    """Schema for household member response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    household_id: UUID
+    entity_id: UUID
+    role: str | None
+    display_name: str | None
+    effective_start_date: date | None
+    effective_end_date: date | None
+    created_at: datetime
+
+
+# Entity Ownership Schemas
+class EntityOwnershipCreate(BaseModel):
+    """Schema for creating an ownership edge."""
+
+    owner_entity_id: UUID
+    owned_entity_id: UUID
+    ownership_fraction: str = Field(..., description="Decimal fraction 0-1")
+    effective_start_date: date
+    effective_end_date: date | None = None
+    ownership_basis: str = "percent"
+    ownership_type: str = "beneficial"
+    notes: str | None = None
+
+
+class EntityOwnershipResponse(BaseModel):
+    """Schema for ownership edge response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    owner_entity_id: UUID
+    owned_entity_id: UUID
+    ownership_fraction: str
+    effective_start_date: date
+    effective_end_date: date | None
+    ownership_basis: str
+    ownership_type: str
+    notes: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class EffectiveOwnershipResponse(BaseModel):
+    """Schema for effective ownership calculation result."""
+
+    entity_id: UUID
+    effective_fraction: str
+    path: list[UUID]
+
+
+class AllocationTreeResponse(BaseModel):
+    """Schema for allocation tree response."""
+
+    root_entity_id: UUID
+    as_of_date: date
+    owned_entities: list[EffectiveOwnershipResponse]
+
+
+class LookThroughDetailResponse(BaseModel):
+    """Schema for look-through detail line item."""
+
+    entity_id: str
+    entity_name: str
+    account_id: str
+    account_name: str
+    direct_balance: str
+    effective_fraction: str
+    weighted_balance: str
+
+
+class LookThroughNetWorthResponse(BaseModel):
+    """Schema for look-through net worth response."""
+
+    total_assets: str
+    total_liabilities: str
+    net_worth: str
+    detail: list[LookThroughDetailResponse]
+
+
+# Partnership Capital Accounts Schemas
+class CapitalAccountResponse(BaseModel):
+    """Schema for a single capital account."""
+
+    account_id: str
+    account_name: str
+    balance: str
+
+
+class PartnershipCapitalAccountsResponse(BaseModel):
+    """Schema for partnership capital accounts report."""
+
+    partnership_id: str
+    partnership_name: str
+    as_of_date: date
+    capital_accounts: list[CapitalAccountResponse]
+    total_capital: str

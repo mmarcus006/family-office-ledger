@@ -12,7 +12,9 @@ from uuid import UUID
 from family_office_ledger.domain.value_objects import AccountType, Money
 from family_office_ledger.repositories.interfaces import (
     AccountRepository,
+    EntityOwnershipRepository,
     EntityRepository,
+    HouseholdRepository,
     PositionRepository,
     SecurityRepository,
     TaxLotRepository,
@@ -24,6 +26,7 @@ from family_office_ledger.services.interfaces import (
     CurrencyService,
     ReportingService,
 )
+from family_office_ledger.services.ownership_graph import OwnershipGraphService
 
 
 class ReportingServiceImpl(ReportingService):
@@ -39,6 +42,8 @@ class ReportingServiceImpl(ReportingService):
         security_repo: SecurityRepository,
         currency_service: CurrencyService | None = None,
         budget_service: BudgetService | None = None,
+        ownership_repo: EntityOwnershipRepository | None = None,
+        household_repo: HouseholdRepository | None = None,
     ) -> None:
         self._entity_repo = entity_repo
         self._account_repo = account_repo
@@ -48,6 +53,18 @@ class ReportingServiceImpl(ReportingService):
         self._security_repo = security_repo
         self._currency_service = currency_service
         self._budget_service = budget_service
+        self._ownership_repo = ownership_repo
+        self._household_repo = household_repo
+        self._ownership_service: OwnershipGraphService | None = None
+        if ownership_repo and household_repo:
+            self._ownership_service = OwnershipGraphService(
+                ownership_repo=ownership_repo,
+                household_repo=household_repo,
+                entity_repo=entity_repo,
+                account_repo=account_repo,
+                transaction_repo=transaction_repo,
+                position_repo=position_repo,
+            )
 
     def _convert_to_base(
         self,
@@ -862,3 +879,137 @@ class ReportingServiceImpl(ReportingService):
                     balance -= entry.credit_amount.amount
 
         return balance
+
+    def household_net_worth_report(
+        self,
+        household_id: UUID,
+        as_of_date: date,
+        base_currency: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate look-through net worth report for a household."""
+        if self._ownership_service is None or self._household_repo is None:
+            return {
+                "report_name": "Household Net Worth Report",
+                "as_of_date": as_of_date,
+                "error": "Ownership service not configured",
+                "totals": {
+                    "total_assets": Decimal("0"),
+                    "total_liabilities": Decimal("0"),
+                    "net_worth": Decimal("0"),
+                },
+            }
+
+        household = self._household_repo.get(household_id)
+        if household is None:
+            return {
+                "report_name": "Household Net Worth Report",
+                "as_of_date": as_of_date,
+                "error": f"Household {household_id} not found",
+                "totals": {
+                    "total_assets": Decimal("0"),
+                    "total_liabilities": Decimal("0"),
+                    "net_worth": Decimal("0"),
+                },
+            }
+
+        look_through = self._ownership_service.household_look_through_net_worth(
+            household_id, as_of_date
+        )
+
+        total_assets = Decimal(str(look_through.get("total_assets", 0)))
+        total_liabilities = Decimal(str(look_through.get("total_liabilities", 0)))
+        net_worth = Decimal(str(look_through.get("net_worth", 0)))
+
+        if base_currency and self._currency_service:
+            total_assets = self._convert_to_base(
+                total_assets, "USD", base_currency, as_of_date
+            )
+            total_liabilities = self._convert_to_base(
+                total_liabilities, "USD", base_currency, as_of_date
+            )
+            net_worth = self._convert_to_base(
+                net_worth, "USD", base_currency, as_of_date
+            )
+
+        result: dict[str, Any] = {
+            "report_name": "Household Net Worth Report",
+            "household_id": str(household_id),
+            "household_name": household.name,
+            "as_of_date": as_of_date,
+            "data": look_through.get("detail", []),
+            "totals": {
+                "total_assets": total_assets,
+                "total_liabilities": total_liabilities,
+                "net_worth": net_worth,
+            },
+        }
+        if base_currency:
+            result["base_currency"] = base_currency
+        return result
+
+    def ownership_weighted_net_worth_report(
+        self,
+        entity_id: UUID,
+        as_of_date: date,
+        base_currency: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate look-through net worth report for a beneficial owner entity."""
+        if self._ownership_service is None:
+            return {
+                "report_name": "Ownership Weighted Net Worth Report",
+                "as_of_date": as_of_date,
+                "error": "Ownership service not configured",
+                "totals": {
+                    "total_assets": Decimal("0"),
+                    "total_liabilities": Decimal("0"),
+                    "net_worth": Decimal("0"),
+                },
+            }
+
+        entity = self._entity_repo.get(entity_id)
+        if entity is None:
+            return {
+                "report_name": "Ownership Weighted Net Worth Report",
+                "as_of_date": as_of_date,
+                "error": f"Entity {entity_id} not found",
+                "totals": {
+                    "total_assets": Decimal("0"),
+                    "total_liabilities": Decimal("0"),
+                    "net_worth": Decimal("0"),
+                },
+            }
+
+        look_through = self._ownership_service.beneficial_owner_look_through_net_worth(
+            entity_id, as_of_date
+        )
+
+        total_assets = Decimal(str(look_through.get("total_assets", 0)))
+        total_liabilities = Decimal(str(look_through.get("total_liabilities", 0)))
+        net_worth = Decimal(str(look_through.get("net_worth", 0)))
+
+        if base_currency and self._currency_service:
+            total_assets = self._convert_to_base(
+                total_assets, "USD", base_currency, as_of_date
+            )
+            total_liabilities = self._convert_to_base(
+                total_liabilities, "USD", base_currency, as_of_date
+            )
+            net_worth = self._convert_to_base(
+                net_worth, "USD", base_currency, as_of_date
+            )
+
+        result: dict[str, Any] = {
+            "report_name": "Ownership Weighted Net Worth Report",
+            "entity_id": str(entity_id),
+            "entity_name": entity.name,
+            "as_of_date": as_of_date,
+            "data": look_through.get("detail", []),
+            "totals": {
+                "total_assets": total_assets,
+                "total_liabilities": total_liabilities,
+                "net_worth": net_worth,
+            },
+        }
+        if base_currency:
+            result["base_currency"] = base_currency
+        return result

@@ -678,3 +678,175 @@ def get_schedule_d(entity_id: str | UUID, tax_year: int) -> dict[str, Any]:
             params={"tax_year": tax_year},
         )
         return _handle_response(r)
+
+
+# --- Household API ---
+
+
+def list_households(include_inactive: bool = False) -> list[dict[str, Any]]:
+    """List all households."""
+    with _client() as client:
+        r = client.get("/households", params={"include_inactive": include_inactive})
+        return _handle_response(r)
+
+
+def create_household(
+    name: str, primary_contact_entity_id: str | UUID | None = None
+) -> dict[str, Any]:
+    """Create a new household."""
+    payload: dict[str, Any] = {"name": name}
+    if primary_contact_entity_id:
+        payload["primary_contact_entity_id"] = str(primary_contact_entity_id)
+    with _client() as client:
+        r = client.post("/households", json=payload)
+        return _handle_response(r)
+
+
+def get_household(household_id: str | UUID) -> dict[str, Any]:
+    """Get a household by ID."""
+    with _client() as client:
+        r = client.get(f"/households/{household_id}")
+        return _handle_response(r)
+
+
+def delete_household(household_id: str | UUID) -> None:
+    """Delete a household."""
+    with _client() as client:
+        r = client.delete(f"/households/{household_id}")
+        if r.status_code >= 400:
+            _handle_response(r)
+
+
+def add_household_member(
+    household_id: str | UUID,
+    entity_id: str | UUID,
+    role: str | None = None,
+    display_name: str | None = None,
+    start_date: date | None = None,
+) -> dict[str, Any]:
+    """Add a member to a household."""
+    payload: dict[str, Any] = {"entity_id": str(entity_id)}
+    if role:
+        payload["role"] = role
+    if display_name:
+        payload["display_name"] = display_name
+    if start_date:
+        payload["effective_start_date"] = start_date.isoformat()
+    with _client() as client:
+        r = client.post(f"/households/{household_id}/members", json=payload)
+        return _handle_response(r)
+
+
+def list_household_members(
+    household_id: str | UUID, as_of: date | None = None
+) -> list[dict[str, Any]]:
+    """List members of a household."""
+    params: dict[str, Any] = {}
+    if as_of:
+        params["as_of_date"] = as_of.isoformat()
+    with _client() as client:
+        r = client.get(f"/households/{household_id}/members", params=params or None)
+        return _handle_response(r)
+
+
+def remove_household_member(household_id: str | UUID, member_id: str | UUID) -> None:
+    """Remove a member from a household."""
+    with _client() as client:
+        r = client.delete(f"/households/{household_id}/members/{member_id}")
+        if r.status_code >= 400:
+            _handle_response(r)
+
+
+def get_household_net_worth(
+    household_id: str | UUID, as_of: date | None = None
+) -> dict[str, Any]:
+    """Get look-through net worth for a household."""
+    params: dict[str, Any] = {}
+    if as_of:
+        params["as_of_date"] = as_of.isoformat()
+    with _client() as client:
+        r = client.get(f"/households/{household_id}/net-worth", params=params or None)
+        return _handle_response(r)
+
+
+# --- Ownership API ---
+
+
+def list_ownership_edges(
+    owner_id: str | UUID | None = None,
+    owned_id: str | UUID | None = None,
+    as_of: date | None = None,
+) -> list[dict[str, Any]]:
+    """List ownership edges with optional filters."""
+    params: dict[str, Any] = {}
+    if owner_id:
+        params["owner_entity_id"] = str(owner_id)
+    if owned_id:
+        params["owned_entity_id"] = str(owned_id)
+    if as_of:
+        params["as_of_date"] = as_of.isoformat()
+    with _client() as client:
+        r = client.get("/ownership", params=params or None)
+        return _handle_response(r)
+
+
+def create_ownership_edge(
+    owner_id: str | UUID,
+    owned_id: str | UUID,
+    fraction: str,
+    start_date: date,
+    ownership_type: str = "beneficial",
+) -> dict[str, Any]:
+    """Create an ownership edge."""
+    payload = {
+        "owner_entity_id": str(owner_id),
+        "owned_entity_id": str(owned_id),
+        "ownership_fraction": fraction,
+        "effective_start_date": start_date.isoformat(),
+        "ownership_type": ownership_type,
+    }
+    with _client() as client:
+        r = client.post("/ownership", json=payload)
+        return _handle_response(r)
+
+
+def get_ownership_edge(ownership_id: str | UUID) -> dict[str, Any]:
+    """Get an ownership edge by ID."""
+    with _client() as client:
+        r = client.get(f"/ownership/{ownership_id}")
+        return _handle_response(r)
+
+
+def delete_ownership_edge(ownership_id: str | UUID) -> None:
+    """Delete an ownership edge."""
+    with _client() as client:
+        r = client.delete(f"/ownership/{ownership_id}")
+        if r.status_code >= 400:
+            _handle_response(r)
+
+
+def get_ownership_tree(
+    entity_id: str | UUID, as_of: date | None = None
+) -> dict[str, Any]:
+    """Get ownership tree for an entity."""
+    params: dict[str, Any] = {}
+    if as_of:
+        params["as_of_date"] = as_of.isoformat()
+    with _client() as client:
+        r = client.get(f"/ownership/entities/{entity_id}/tree", params=params or None)
+        return _handle_response(r)
+
+
+def get_entity_look_through_net_worth(
+    entity_id: str | UUID, as_of: date | None = None
+) -> dict[str, Any]:
+    """Get look-through net worth for an entity."""
+    params: dict[str, Any] = {}
+    if as_of:
+        params["as_of_date"] = as_of.isoformat()
+    with _client() as client:
+        r = client.get(
+            f"/ownership/entities/{entity_id}/look-through-net-worth",
+            params=params or None,
+        )
+        return _handle_response(r)

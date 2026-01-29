@@ -14,6 +14,8 @@ from uuid import UUID
 from family_office_ledger.domain.budgets import Budget, BudgetLineItem, BudgetPeriodType
 from family_office_ledger.domain.entities import Account, Entity, Position, Security
 from family_office_ledger.domain.exchange_rates import ExchangeRate, ExchangeRateSource
+from family_office_ledger.domain.households import Household, HouseholdMember
+from family_office_ledger.domain.ownership import EntityOwnership, SelfOwnershipError
 from family_office_ledger.domain.reconciliation import (
     ReconciliationMatch,
     ReconciliationMatchStatus,
@@ -29,13 +31,16 @@ from family_office_ledger.domain.value_objects import (
     EntityType,
     Money,
     Quantity,
+    TaxTreatment,
 )
 from family_office_ledger.domain.vendors import Vendor
 from family_office_ledger.repositories.interfaces import (
     AccountRepository,
     BudgetRepository,
+    EntityOwnershipRepository,
     EntityRepository,
     ExchangeRateRepository,
+    HouseholdRepository,
     PositionRepository,
     ReconciliationSessionRepository,
     SecurityRepository,
@@ -81,6 +86,55 @@ class SQLiteDatabase:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            -- Households table
+            CREATE TABLE IF NOT EXISTS households (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                primary_contact_entity_id TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (primary_contact_entity_id) REFERENCES entities(id)
+            );
+
+            -- Household members table
+            CREATE TABLE IF NOT EXISTS household_members (
+                id TEXT PRIMARY KEY,
+                household_id TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                role TEXT,
+                display_name TEXT,
+                effective_start_date TEXT,
+                effective_end_date TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(household_id, entity_id, effective_start_date),
+                FOREIGN KEY (household_id) REFERENCES households(id),
+                FOREIGN KEY (entity_id) REFERENCES entities(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_household_members_household ON household_members(household_id);
+            CREATE INDEX IF NOT EXISTS idx_household_members_entity ON household_members(entity_id);
+
+            -- Entity ownership edges table
+            CREATE TABLE IF NOT EXISTS entity_ownership (
+                id TEXT PRIMARY KEY,
+                owner_entity_id TEXT NOT NULL,
+                owned_entity_id TEXT NOT NULL,
+                ownership_fraction TEXT NOT NULL,
+                effective_start_date TEXT NOT NULL,
+                effective_end_date TEXT,
+                ownership_basis TEXT NOT NULL DEFAULT 'percent',
+                ownership_type TEXT NOT NULL DEFAULT 'beneficial',
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (owner_entity_id) REFERENCES entities(id),
+                FOREIGN KEY (owned_entity_id) REFERENCES entities(id),
+                CHECK (owner_entity_id != owned_entity_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_entity_ownership_owner ON entity_ownership(owner_entity_id);
+            CREATE INDEX IF NOT EXISTS idx_entity_ownership_owned ON entity_ownership(owned_entity_id);
+            CREATE INDEX IF NOT EXISTS idx_entity_ownership_dates ON entity_ownership(effective_start_date, effective_end_date);
 
             -- Accounts table
             CREATE TABLE IF NOT EXISTS accounts (
@@ -247,6 +301,7 @@ class SQLiteDatabase:
             CREATE INDEX IF NOT EXISTS idx_vendors_name ON vendors(name);
             CREATE INDEX IF NOT EXISTS idx_vendors_category ON vendors(category);
             CREATE INDEX IF NOT EXISTS idx_vendors_tax_id ON vendors(tax_id);
+            CREATE INDEX IF NOT EXISTS idx_households_name ON households(name);
 
             -- Budgets table
             CREATE TABLE IF NOT EXISTS budgets (
@@ -296,6 +351,16 @@ class SQLiteDatabase:
                 )
         with contextlib.suppress(sqlite3.OperationalError):
             cursor.execute("ALTER TABLE entries ADD COLUMN category TEXT")
+        entity_columns = [
+            ("tax_treatment", "TEXT"),
+            ("tax_id", "TEXT"),
+            ("tax_id_type", "TEXT"),
+            ("formation_date", "TEXT"),
+            ("jurisdiction", "TEXT"),
+        ]
+        for column, col_type in entity_columns:
+            with contextlib.suppress(sqlite3.OperationalError):
+                cursor.execute(f"ALTER TABLE entities ADD COLUMN {column} {col_type}")
         conn.commit()
 
     def close(self) -> None:
@@ -315,8 +380,9 @@ class SQLiteEntityRepository(EntityRepository):
         conn = self._db.get_connection()
         conn.execute(
             """
-            INSERT INTO entities (id, name, entity_type, fiscal_year_end, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO entities (id, name, entity_type, fiscal_year_end, is_active, created_at, updated_at,
+                                  tax_treatment, tax_id, tax_id_type, formation_date, jurisdiction)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(entity.id),
@@ -326,6 +392,11 @@ class SQLiteEntityRepository(EntityRepository):
                 1 if entity.is_active else 0,
                 entity.created_at.isoformat(),
                 entity.updated_at.isoformat(),
+                entity.tax_treatment.value if entity.tax_treatment else None,
+                entity.tax_id,
+                entity.tax_id_type,
+                entity.formation_date.isoformat() if entity.formation_date else None,
+                entity.jurisdiction,
             ),
         )
         conn.commit()
@@ -365,7 +436,12 @@ class SQLiteEntityRepository(EntityRepository):
                 entity_type = ?,
                 fiscal_year_end = ?,
                 is_active = ?,
-                updated_at = ?
+                updated_at = ?,
+                tax_treatment = ?,
+                tax_id = ?,
+                tax_id_type = ?,
+                formation_date = ?,
+                jurisdiction = ?
             WHERE id = ?
             """,
             (
@@ -374,6 +450,11 @@ class SQLiteEntityRepository(EntityRepository):
                 entity.fiscal_year_end.isoformat(),
                 1 if entity.is_active else 0,
                 entity.updated_at.isoformat(),
+                entity.tax_treatment.value if entity.tax_treatment else None,
+                entity.tax_id,
+                entity.tax_id_type,
+                entity.formation_date.isoformat() if entity.formation_date else None,
+                entity.jurisdiction,
                 str(entity.id),
             ),
         )
@@ -385,14 +466,29 @@ class SQLiteEntityRepository(EntityRepository):
         conn.commit()
 
     def _row_to_entity(self, row: sqlite3.Row) -> Entity:
+        row_keys = row.keys()
+        tax_treatment_val = (
+            row["tax_treatment"] if "tax_treatment" in row_keys else None
+        )
+        formation_date_val = (
+            row["formation_date"] if "formation_date" in row_keys else None
+        )
         entity = Entity(
             name=row["name"],
             entity_type=EntityType(row["entity_type"]),
             id=UUID(row["id"]),
             fiscal_year_end=date.fromisoformat(row["fiscal_year_end"]),
             is_active=bool(row["is_active"]),
+            tax_treatment=TaxTreatment(tax_treatment_val)
+            if tax_treatment_val
+            else None,
+            tax_id=row["tax_id"] if "tax_id" in row_keys else None,
+            tax_id_type=row["tax_id_type"] if "tax_id_type" in row_keys else None,
+            formation_date=date.fromisoformat(formation_date_val)
+            if formation_date_val
+            else None,
+            jurisdiction=row["jurisdiction"] if "jurisdiction" in row_keys else None,
         )
-        # Set created_at and updated_at directly to avoid triggering defaults
         object.__setattr__(
             entity, "created_at", datetime.fromisoformat(row["created_at"])
         )
@@ -402,9 +498,234 @@ class SQLiteEntityRepository(EntityRepository):
         return entity
 
 
-class SQLiteAccountRepository(AccountRepository):
-    """SQLite implementation of AccountRepository."""
+class SQLiteHouseholdRepository(HouseholdRepository):
+    def __init__(self, database: SQLiteDatabase) -> None:
+        self._db = database
 
+    def add(self, household: Household) -> None:
+        conn = self._db.get_connection()
+        conn.execute(
+            """
+            INSERT INTO households (id, name, primary_contact_entity_id, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(household.id),
+                household.name,
+                str(household.primary_contact_entity_id)
+                if household.primary_contact_entity_id
+                else None,
+                1 if household.is_active else 0,
+                household.created_at.isoformat(),
+                household.updated_at.isoformat(),
+            ),
+        )
+        conn.commit()
+
+    def get(self, household_id: UUID) -> Household | None:
+        conn = self._db.get_connection()
+        row = conn.execute(
+            "SELECT * FROM households WHERE id = ?", (str(household_id),)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_household(row)
+
+    def get_by_name(self, name: str) -> Household | None:
+        conn = self._db.get_connection()
+        row = conn.execute(
+            "SELECT * FROM households WHERE name = ?", (name,)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_household(row)
+
+    def list_all(self) -> Iterable[Household]:
+        conn = self._db.get_connection()
+        rows = conn.execute("SELECT * FROM households").fetchall()
+        return [self._row_to_household(row) for row in rows]
+
+    def list_active(self) -> Iterable[Household]:
+        conn = self._db.get_connection()
+        rows = conn.execute("SELECT * FROM households WHERE is_active = 1").fetchall()
+        return [self._row_to_household(row) for row in rows]
+
+    def update(self, household: Household) -> None:
+        conn = self._db.get_connection()
+        conn.execute(
+            """
+            UPDATE households SET
+                name = ?,
+                primary_contact_entity_id = ?,
+                is_active = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                household.name,
+                str(household.primary_contact_entity_id)
+                if household.primary_contact_entity_id
+                else None,
+                1 if household.is_active else 0,
+                household.updated_at.isoformat(),
+                str(household.id),
+            ),
+        )
+        conn.commit()
+
+    def delete(self, household_id: UUID) -> None:
+        conn = self._db.get_connection()
+        conn.execute("DELETE FROM households WHERE id = ?", (str(household_id),))
+        conn.commit()
+
+    def _row_to_household(self, row: sqlite3.Row) -> Household:
+        household = Household(
+            name=row["name"],
+            id=UUID(row["id"]),
+            primary_contact_entity_id=UUID(row["primary_contact_entity_id"])
+            if row["primary_contact_entity_id"]
+            else None,
+            is_active=bool(row["is_active"]),
+        )
+        object.__setattr__(
+            household, "created_at", datetime.fromisoformat(row["created_at"])
+        )
+        object.__setattr__(
+            household, "updated_at", datetime.fromisoformat(row["updated_at"])
+        )
+        return household
+
+    def add_member(self, member: HouseholdMember) -> None:
+        conn = self._db.get_connection()
+        conn.execute(
+            """
+            INSERT INTO household_members (id, household_id, entity_id, role, display_name,
+                                           effective_start_date, effective_end_date, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(member.id),
+                str(member.household_id),
+                str(member.entity_id),
+                member.role,
+                member.display_name,
+                member.effective_start_date.isoformat()
+                if member.effective_start_date
+                else None,
+                member.effective_end_date.isoformat()
+                if member.effective_end_date
+                else None,
+                member.created_at.isoformat(),
+            ),
+        )
+        conn.commit()
+
+    def get_member(self, member_id: UUID) -> HouseholdMember | None:
+        conn = self._db.get_connection()
+        row = conn.execute(
+            "SELECT * FROM household_members WHERE id = ?", (str(member_id),)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_member(row)
+
+    def list_members(
+        self, household_id: UUID, as_of_date: date | None = None
+    ) -> Iterable[HouseholdMember]:
+        conn = self._db.get_connection()
+        if as_of_date is None:
+            rows = conn.execute(
+                "SELECT * FROM household_members WHERE household_id = ?",
+                (str(household_id),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM household_members
+                WHERE household_id = ?
+                AND (effective_start_date IS NULL OR effective_start_date <= ?)
+                AND (effective_end_date IS NULL OR ? < effective_end_date)
+                """,
+                (str(household_id), as_of_date.isoformat(), as_of_date.isoformat()),
+            ).fetchall()
+        return [self._row_to_member(row) for row in rows]
+
+    def list_households_for_entity(
+        self, entity_id: UUID, as_of_date: date | None = None
+    ) -> Iterable[HouseholdMember]:
+        conn = self._db.get_connection()
+        if as_of_date is None:
+            rows = conn.execute(
+                "SELECT * FROM household_members WHERE entity_id = ?",
+                (str(entity_id),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM household_members
+                WHERE entity_id = ?
+                AND (effective_start_date IS NULL OR effective_start_date <= ?)
+                AND (effective_end_date IS NULL OR ? < effective_end_date)
+                """,
+                (str(entity_id), as_of_date.isoformat(), as_of_date.isoformat()),
+            ).fetchall()
+        return [self._row_to_member(row) for row in rows]
+
+    def update_member(self, member: HouseholdMember) -> None:
+        conn = self._db.get_connection()
+        conn.execute(
+            """
+            UPDATE household_members SET
+                household_id = ?,
+                entity_id = ?,
+                role = ?,
+                display_name = ?,
+                effective_start_date = ?,
+                effective_end_date = ?
+            WHERE id = ?
+            """,
+            (
+                str(member.household_id),
+                str(member.entity_id),
+                member.role,
+                member.display_name,
+                member.effective_start_date.isoformat()
+                if member.effective_start_date
+                else None,
+                member.effective_end_date.isoformat()
+                if member.effective_end_date
+                else None,
+                str(member.id),
+            ),
+        )
+        conn.commit()
+
+    def remove_member(self, member_id: UUID) -> None:
+        conn = self._db.get_connection()
+        conn.execute("DELETE FROM household_members WHERE id = ?", (str(member_id),))
+        conn.commit()
+
+    def _row_to_member(self, row: sqlite3.Row) -> HouseholdMember:
+        member = HouseholdMember(
+            household_id=UUID(row["household_id"]),
+            entity_id=UUID(row["entity_id"]),
+            id=UUID(row["id"]),
+            role=row["role"],
+            display_name=row["display_name"],
+            effective_start_date=date.fromisoformat(row["effective_start_date"])
+            if row["effective_start_date"]
+            else None,
+            effective_end_date=date.fromisoformat(row["effective_end_date"])
+            if row["effective_end_date"]
+            else None,
+        )
+        object.__setattr__(
+            member, "created_at", datetime.fromisoformat(row["created_at"])
+        )
+        return member
+
+
+class SQLiteAccountRepository(AccountRepository):
     def __init__(self, database: SQLiteDatabase) -> None:
         self._db = database
 
@@ -1797,3 +2118,158 @@ class SQLiteBudgetRepository(BudgetRepository):
             account_id=UUID(row["account_id"]) if row["account_id"] else None,
             notes=row["notes"] or "",
         )
+
+
+class SQLiteEntityOwnershipRepository(EntityOwnershipRepository):
+    def __init__(self, db: SQLiteDatabase) -> None:
+        self._db = db
+
+    def add(self, ownership: EntityOwnership) -> None:
+        if ownership.owner_entity_id == ownership.owned_entity_id:
+            raise SelfOwnershipError(ownership.owner_entity_id)
+        conn = self._db.get_connection()
+        conn.execute(
+            """
+            INSERT INTO entity_ownership (
+                id, owner_entity_id, owned_entity_id, ownership_fraction,
+                effective_start_date, effective_end_date, ownership_basis,
+                ownership_type, notes, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(ownership.id),
+                str(ownership.owner_entity_id),
+                str(ownership.owned_entity_id),
+                str(ownership.ownership_fraction),
+                ownership.effective_start_date.isoformat(),
+                ownership.effective_end_date.isoformat()
+                if ownership.effective_end_date
+                else None,
+                ownership.ownership_basis,
+                ownership.ownership_type,
+                ownership.notes,
+                ownership.created_at.isoformat(),
+                ownership.updated_at.isoformat(),
+            ),
+        )
+        conn.commit()
+
+    def get(self, ownership_id: UUID) -> EntityOwnership | None:
+        conn = self._db.get_connection()
+        cursor = conn.execute(
+            "SELECT * FROM entity_ownership WHERE id = ?", (str(ownership_id),)
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_ownership(row)
+
+    def list_by_owner(
+        self, owner_entity_id: UUID, as_of_date: date | None = None
+    ) -> Iterable[EntityOwnership]:
+        conn = self._db.get_connection()
+        if as_of_date is None:
+            cursor = conn.execute(
+                "SELECT * FROM entity_ownership WHERE owner_entity_id = ?",
+                (str(owner_entity_id),),
+            )
+        else:
+            cursor = conn.execute(
+                """
+                SELECT * FROM entity_ownership
+                WHERE owner_entity_id = ?
+                AND effective_start_date <= ?
+                AND (effective_end_date IS NULL OR effective_end_date > ?)
+                """,
+                (str(owner_entity_id), as_of_date.isoformat(), as_of_date.isoformat()),
+            )
+        return [self._row_to_ownership(row) for row in cursor.fetchall()]
+
+    def list_by_owned(
+        self, owned_entity_id: UUID, as_of_date: date | None = None
+    ) -> Iterable[EntityOwnership]:
+        conn = self._db.get_connection()
+        if as_of_date is None:
+            cursor = conn.execute(
+                "SELECT * FROM entity_ownership WHERE owned_entity_id = ?",
+                (str(owned_entity_id),),
+            )
+        else:
+            cursor = conn.execute(
+                """
+                SELECT * FROM entity_ownership
+                WHERE owned_entity_id = ?
+                AND effective_start_date <= ?
+                AND (effective_end_date IS NULL OR effective_end_date > ?)
+                """,
+                (str(owned_entity_id), as_of_date.isoformat(), as_of_date.isoformat()),
+            )
+        return [self._row_to_ownership(row) for row in cursor.fetchall()]
+
+    def list_active_as_of_date(self, as_of_date: date) -> Iterable[EntityOwnership]:
+        conn = self._db.get_connection()
+        cursor = conn.execute(
+            """
+            SELECT * FROM entity_ownership
+            WHERE effective_start_date <= ?
+            AND (effective_end_date IS NULL OR effective_end_date > ?)
+            """,
+            (as_of_date.isoformat(), as_of_date.isoformat()),
+        )
+        return [self._row_to_ownership(row) for row in cursor.fetchall()]
+
+    def update(self, ownership: EntityOwnership) -> None:
+        if ownership.owner_entity_id == ownership.owned_entity_id:
+            raise SelfOwnershipError(ownership.owner_entity_id)
+        conn = self._db.get_connection()
+        conn.execute(
+            """
+            UPDATE entity_ownership SET
+                owner_entity_id = ?, owned_entity_id = ?, ownership_fraction = ?,
+                effective_start_date = ?, effective_end_date = ?, ownership_basis = ?,
+                ownership_type = ?, notes = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                str(ownership.owner_entity_id),
+                str(ownership.owned_entity_id),
+                str(ownership.ownership_fraction),
+                ownership.effective_start_date.isoformat(),
+                ownership.effective_end_date.isoformat()
+                if ownership.effective_end_date
+                else None,
+                ownership.ownership_basis,
+                ownership.ownership_type,
+                ownership.notes,
+                ownership.updated_at.isoformat(),
+                str(ownership.id),
+            ),
+        )
+        conn.commit()
+
+    def delete(self, ownership_id: UUID) -> None:
+        conn = self._db.get_connection()
+        conn.execute("DELETE FROM entity_ownership WHERE id = ?", (str(ownership_id),))
+        conn.commit()
+
+    def _row_to_ownership(self, row: sqlite3.Row) -> EntityOwnership:
+        ownership = EntityOwnership(
+            owner_entity_id=UUID(row["owner_entity_id"]),
+            owned_entity_id=UUID(row["owned_entity_id"]),
+            ownership_fraction=Decimal(row["ownership_fraction"]),
+            effective_start_date=date.fromisoformat(row["effective_start_date"]),
+            id=UUID(row["id"]),
+            effective_end_date=date.fromisoformat(row["effective_end_date"])
+            if row["effective_end_date"]
+            else None,
+            ownership_basis=row["ownership_basis"],
+            ownership_type=row["ownership_type"],
+            notes=row["notes"],
+        )
+        object.__setattr__(
+            ownership, "created_at", datetime.fromisoformat(row["created_at"])
+        )
+        object.__setattr__(
+            ownership, "updated_at", datetime.fromisoformat(row["updated_at"])
+        )
+        return ownership

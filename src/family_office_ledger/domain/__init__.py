@@ -14,6 +14,7 @@ from family_office_ledger.domain.corporate_actions import CorporateAction, Price
 from family_office_ledger.domain.documents import Document, TaxDocLine
 from family_office_ledger.domain.entities import Account, Entity, Position, Security
 from family_office_ledger.domain.exchange_rates import ExchangeRate, ExchangeRateSource
+from family_office_ledger.domain.households import Household, HouseholdMember
 from family_office_ledger.domain.reconciliation import (
     ReconciliationMatch,
     ReconciliationMatchStatus,
@@ -32,6 +33,7 @@ from family_office_ledger.domain.value_objects import (
     LotSelection,
     Money,
     Quantity,
+    TaxTreatment,
 )
 from family_office_ledger.domain.vendors import Vendor
 
@@ -53,6 +55,8 @@ __all__ = [
     "ExpenseCategory",
     "ExchangeRate",
     "ExchangeRateSource",
+    "Household",
+    "HouseholdMember",
     "LotSelection",
     "Money",
     "Position",
@@ -65,6 +69,7 @@ __all__ = [
     "Security",
     "TaxDocLine",
     "TaxLot",
+    "TaxTreatment",
     "Transaction",
     "TransferMatch",
     "TransferMatchingSession",

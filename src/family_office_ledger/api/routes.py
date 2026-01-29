@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from family_office_ledger.api.schemas import (
     AccountCreate,
     AccountResponse,
+    AllocationTreeResponse,
     AssetAllocationReportResponse,
     AssetAllocationResponse,
     AuditEntryResponse,
@@ -30,7 +31,10 @@ from family_office_ledger.api.schemas import (
     CreateTransferSessionRequest,
     CurrencyConvertRequest,
     CurrencyConvertResponse,
+    EffectiveOwnershipResponse,
     EntityCreate,
+    EntityOwnershipCreate,
+    EntityOwnershipResponse,
     EntityResponse,
     EntryResponse,
     ExchangeRateCreate,
@@ -45,7 +49,15 @@ from family_office_ledger.api.schemas import (
     GenerateTaxDocumentsRequest,
     HealthResponse,
     HoldingConcentrationResponse,
+    HouseholdCreate,
+    HouseholdMemberCreate,
+    HouseholdMemberResponse,
+    HouseholdResponse,
+    LookThroughDetailResponse,
+    LookThroughNetWorthResponse,
     MarkQSBSRequest,
+    CapitalAccountResponse,
+    PartnershipCapitalAccountsResponse,
     MatchListResponse,
     MatchResponse,
     PerformanceMetricsResponse,
@@ -76,6 +88,8 @@ from family_office_ledger.api.schemas import (
 from family_office_ledger.domain.audit import AuditAction, AuditEntityType
 from family_office_ledger.domain.budgets import Budget, BudgetLineItem
 from family_office_ledger.domain.entities import Account, Entity
+from family_office_ledger.domain.households import Household, HouseholdMember
+from family_office_ledger.domain.ownership import EntityOwnership, SelfOwnershipError
 from family_office_ledger.domain.exchange_rates import ExchangeRate, ExchangeRateSource
 from family_office_ledger.domain.reconciliation import (
     ReconciliationMatch,
@@ -105,8 +119,10 @@ from family_office_ledger.repositories.sqlite import (
     SQLiteAccountRepository,
     SQLiteBudgetRepository,
     SQLiteDatabase,
+    SQLiteEntityOwnershipRepository,
     SQLiteEntityRepository,
     SQLiteExchangeRateRepository,
+    SQLiteHouseholdRepository,
     SQLitePositionRepository,
     SQLiteReconciliationSessionRepository,
     SQLiteSecurityRepository,
@@ -144,6 +160,10 @@ from family_office_ledger.services.transfer_matching import (
     TransferMatchNotFoundError,
     TransferSessionNotFoundError,
 )
+from family_office_ledger.services.ownership_graph import (
+    CycleDetectedError,
+    OwnershipGraphService,
+)
 
 # Create routers
 health_router = APIRouter(tags=["health"])
@@ -161,6 +181,8 @@ currency_router = APIRouter(prefix="/currency", tags=["currency"])
 expense_router = APIRouter(prefix="/expenses", tags=["expenses"])
 vendor_router = APIRouter(prefix="/vendors", tags=["vendors"])
 budget_router = APIRouter(prefix="/budgets", tags=["budgets"])
+household_router = APIRouter(prefix="/households", tags=["households"])
+ownership_router = APIRouter(prefix="/ownership", tags=["ownership"])
 
 
 # Dependency injection functions
@@ -2486,4 +2508,482 @@ def get_budget_alerts(
         budget_id=budget_id,
         alerts=alerts,
         total_alerts=len(alerts),
+    )
+
+
+# Household helper functions
+def get_household_repository(db: SQLiteDatabase) -> SQLiteHouseholdRepository:
+    return SQLiteHouseholdRepository(db)
+
+
+def get_ownership_repository(db: SQLiteDatabase) -> SQLiteEntityOwnershipRepository:
+    return SQLiteEntityOwnershipRepository(db)
+
+
+def get_ownership_graph_service(db: SQLiteDatabase) -> OwnershipGraphService:
+    ownership_repo = SQLiteEntityOwnershipRepository(db)
+    household_repo = SQLiteHouseholdRepository(db)
+    entity_repo = SQLiteEntityRepository(db)
+    account_repo = SQLiteAccountRepository(db)
+    transaction_repo = SQLiteTransactionRepository(db)
+    return OwnershipGraphService(
+        ownership_repo,
+        household_repo,
+        entity_repo,
+        account_repo,
+        transaction_repo,
+    )
+
+
+def _household_to_response(household: Household) -> HouseholdResponse:
+    return HouseholdResponse(
+        id=household.id,
+        name=household.name,
+        primary_contact_entity_id=household.primary_contact_entity_id,
+        is_active=household.is_active,
+        created_at=household.created_at,
+        updated_at=household.updated_at,
+    )
+
+
+def _household_member_to_response(member: HouseholdMember) -> HouseholdMemberResponse:
+    return HouseholdMemberResponse(
+        id=member.id,
+        household_id=member.household_id,
+        entity_id=member.entity_id,
+        role=member.role,
+        display_name=member.display_name,
+        effective_start_date=member.effective_start_date,
+        effective_end_date=member.effective_end_date,
+        created_at=member.created_at,
+    )
+
+
+def _ownership_to_response(ownership: EntityOwnership) -> EntityOwnershipResponse:
+    return EntityOwnershipResponse(
+        id=ownership.id,
+        owner_entity_id=ownership.owner_entity_id,
+        owned_entity_id=ownership.owned_entity_id,
+        ownership_fraction=str(ownership.ownership_fraction),
+        effective_start_date=ownership.effective_start_date,
+        effective_end_date=ownership.effective_end_date,
+        ownership_basis=ownership.ownership_basis,
+        ownership_type=ownership.ownership_type,
+        notes=ownership.notes,
+        created_at=ownership.created_at,
+        updated_at=ownership.updated_at,
+    )
+
+
+# Household endpoints
+@household_router.post(
+    "",
+    response_model=HouseholdResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_household(
+    payload: HouseholdCreate,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> HouseholdResponse:
+    household_repo = get_household_repository(db)
+
+    household = Household(
+        name=payload.name,
+        primary_contact_entity_id=payload.primary_contact_entity_id,
+    )
+    household_repo.add(household)
+    return _household_to_response(household)
+
+
+@household_router.get("", response_model=list[HouseholdResponse])
+def list_households(
+    db: Annotated[SQLiteDatabase, Depends()],
+    active_only: bool = Query(default=False),
+) -> list[HouseholdResponse]:
+    household_repo = get_household_repository(db)
+    if active_only:
+        households = list(household_repo.list_active())
+    else:
+        households = list(household_repo.list_all())
+    return [_household_to_response(h) for h in households]
+
+
+@household_router.get("/{household_id}", response_model=HouseholdResponse)
+def get_household(
+    household_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> HouseholdResponse:
+    household_repo = get_household_repository(db)
+    household = household_repo.get(household_id)
+    if household is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Household {household_id} not found",
+        )
+    return _household_to_response(household)
+
+
+@household_router.delete("/{household_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_household(
+    household_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> None:
+    household_repo = get_household_repository(db)
+    household = household_repo.get(household_id)
+    if household is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Household {household_id} not found",
+        )
+    household_repo.delete(household_id)
+
+
+@household_router.post(
+    "/{household_id}/members",
+    response_model=HouseholdMemberResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_household_member(
+    household_id: UUID,
+    payload: HouseholdMemberCreate,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> HouseholdMemberResponse:
+    household_repo = get_household_repository(db)
+    entity_repo = get_entity_repository(db)
+
+    household = household_repo.get(household_id)
+    if household is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Household {household_id} not found",
+        )
+
+    entity = entity_repo.get(payload.entity_id)
+    if entity is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Entity {payload.entity_id} not found",
+        )
+
+    member = HouseholdMember(
+        household_id=household_id,
+        entity_id=payload.entity_id,
+        role=payload.role,
+        display_name=payload.display_name,
+        effective_start_date=payload.effective_start_date,
+        effective_end_date=payload.effective_end_date,
+    )
+    household_repo.add_member(member)
+    return _household_member_to_response(member)
+
+
+@household_router.get(
+    "/{household_id}/members",
+    response_model=list[HouseholdMemberResponse],
+)
+def list_household_members(
+    household_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    as_of_date: date | None = Query(default=None),
+) -> list[HouseholdMemberResponse]:
+    household_repo = get_household_repository(db)
+
+    household = household_repo.get(household_id)
+    if household is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Household {household_id} not found",
+        )
+
+    members = list(household_repo.list_members(household_id, as_of_date))
+    return [_household_member_to_response(m) for m in members]
+
+
+@household_router.delete(
+    "/{household_id}/members/{member_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def remove_household_member(
+    household_id: UUID,
+    member_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> None:
+    household_repo = get_household_repository(db)
+
+    member = household_repo.get_member(member_id)
+    if member is None or member.household_id != household_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Member {member_id} not found in household {household_id}",
+        )
+    household_repo.remove_member(member_id)
+
+
+@household_router.get(
+    "/{household_id}/net-worth",
+    response_model=LookThroughNetWorthResponse,
+)
+def get_household_look_through_net_worth(
+    household_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    as_of_date: date = Query(default_factory=date.today),
+) -> LookThroughNetWorthResponse:
+    household_repo = get_household_repository(db)
+    household = household_repo.get(household_id)
+    if household is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Household {household_id} not found",
+        )
+
+    service = get_ownership_graph_service(db)
+    result = service.household_look_through_net_worth(household_id, as_of_date)
+
+    detail = [
+        LookThroughDetailResponse(
+            entity_id=d["entity_id"],
+            entity_name=d["entity_name"],
+            account_id=d["account_id"],
+            account_name=d["account_name"],
+            direct_balance=str(d["direct_balance"]),
+            effective_fraction=str(d["effective_fraction"]),
+            weighted_balance=str(d["weighted_balance"]),
+        )
+        for d in result["detail"]
+    ]
+
+    return LookThroughNetWorthResponse(
+        total_assets=str(result["total_assets"]),
+        total_liabilities=str(result["total_liabilities"]),
+        net_worth=str(result["net_worth"]),
+        detail=detail,
+    )
+
+
+# Ownership endpoints
+@ownership_router.post(
+    "",
+    response_model=EntityOwnershipResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_ownership_edge(
+    payload: EntityOwnershipCreate,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> EntityOwnershipResponse:
+    ownership_repo = get_ownership_repository(db)
+    entity_repo = get_entity_repository(db)
+    service = get_ownership_graph_service(db)
+
+    owner = entity_repo.get(payload.owner_entity_id)
+    if owner is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Owner entity {payload.owner_entity_id} not found",
+        )
+
+    owned = entity_repo.get(payload.owned_entity_id)
+    if owned is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Owned entity {payload.owned_entity_id} not found",
+        )
+
+    try:
+        ownership = EntityOwnership(
+            owner_entity_id=payload.owner_entity_id,
+            owned_entity_id=payload.owned_entity_id,
+            ownership_fraction=Decimal(payload.ownership_fraction),
+            effective_start_date=payload.effective_start_date,
+            effective_end_date=payload.effective_end_date,
+            ownership_basis=payload.ownership_basis,
+            ownership_type=payload.ownership_type,
+            notes=payload.notes,
+        )
+    except SelfOwnershipError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+    try:
+        service.validate_ownership_edge(ownership)
+    except CycleDetectedError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Adding this edge would create a cycle: {e}",
+        )
+
+    ownership_repo.add(ownership)
+    return _ownership_to_response(ownership)
+
+
+@ownership_router.get("", response_model=list[EntityOwnershipResponse])
+def list_ownership_edges(
+    db: Annotated[SQLiteDatabase, Depends()],
+    owner_entity_id: UUID | None = Query(default=None),
+    owned_entity_id: UUID | None = Query(default=None),
+    as_of_date: date | None = Query(default=None),
+) -> list[EntityOwnershipResponse]:
+    ownership_repo = get_ownership_repository(db)
+
+    if owner_entity_id and owned_entity_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Specify either owner_entity_id or owned_entity_id, not both",
+        )
+
+    if owner_entity_id:
+        edges = list(ownership_repo.list_by_owner(owner_entity_id, as_of_date))
+    elif owned_entity_id:
+        edges = list(ownership_repo.list_by_owned(owned_entity_id, as_of_date))
+    elif as_of_date:
+        edges = list(ownership_repo.list_active_as_of_date(as_of_date))
+    else:
+        edges = list(ownership_repo.list_active_as_of_date(date.today()))
+
+    return [_ownership_to_response(e) for e in edges]
+
+
+@ownership_router.get("/{ownership_id}", response_model=EntityOwnershipResponse)
+def get_ownership_edge(
+    ownership_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> EntityOwnershipResponse:
+    ownership_repo = get_ownership_repository(db)
+    ownership = ownership_repo.get(ownership_id)
+    if ownership is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Ownership edge {ownership_id} not found",
+        )
+    return _ownership_to_response(ownership)
+
+
+@ownership_router.delete("/{ownership_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_ownership_edge(
+    ownership_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> None:
+    ownership_repo = get_ownership_repository(db)
+    ownership = ownership_repo.get(ownership_id)
+    if ownership is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Ownership edge {ownership_id} not found",
+        )
+    ownership_repo.delete(ownership_id)
+
+
+@ownership_router.get(
+    "/allocation-tree/{entity_id}",
+    response_model=AllocationTreeResponse,
+)
+def get_allocation_tree(
+    entity_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    as_of_date: date = Query(default_factory=date.today),
+) -> AllocationTreeResponse:
+    entity_repo = get_entity_repository(db)
+    entity = entity_repo.get(entity_id)
+    if entity is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Entity {entity_id} not found",
+        )
+
+    service = get_ownership_graph_service(db)
+    effective = service.compute_effective_ownership(entity_id, as_of_date)
+
+    owned_entities = [
+        EffectiveOwnershipResponse(
+            entity_id=eo.entity_id,
+            effective_fraction=str(eo.effective_fraction),
+            path=eo.path,
+        )
+        for eo in effective.values()
+    ]
+
+    return AllocationTreeResponse(
+        root_entity_id=entity_id,
+        as_of_date=as_of_date,
+        owned_entities=owned_entities,
+    )
+
+
+@ownership_router.get(
+    "/look-through/{entity_id}",
+    response_model=LookThroughNetWorthResponse,
+)
+def get_entity_look_through_net_worth(
+    entity_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    as_of_date: date = Query(default_factory=date.today),
+) -> LookThroughNetWorthResponse:
+    entity_repo = get_entity_repository(db)
+    entity = entity_repo.get(entity_id)
+    if entity is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Entity {entity_id} not found",
+        )
+
+    service = get_ownership_graph_service(db)
+    result = service.beneficial_owner_look_through_net_worth(entity_id, as_of_date)
+
+    detail = [
+        LookThroughDetailResponse(
+            entity_id=d["entity_id"],
+            entity_name=d["entity_name"],
+            account_id=d["account_id"],
+            account_name=d["account_name"],
+            direct_balance=str(d["direct_balance"]),
+            effective_fraction=str(d["effective_fraction"]),
+            weighted_balance=str(d["weighted_balance"]),
+        )
+        for d in result["detail"]
+    ]
+
+    return LookThroughNetWorthResponse(
+        total_assets=str(result["total_assets"]),
+        total_liabilities=str(result["total_liabilities"]),
+        net_worth=str(result["net_worth"]),
+        detail=detail,
+    )
+
+
+@ownership_router.get(
+    "/capital-accounts/{partnership_id}",
+    response_model=PartnershipCapitalAccountsResponse,
+)
+def get_partnership_capital_accounts(
+    partnership_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    as_of_date: date = Query(default_factory=date.today),
+) -> PartnershipCapitalAccountsResponse:
+    entity_repo = get_entity_repository(db)
+    entity = entity_repo.get(partnership_id)
+    if entity is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Partnership entity {partnership_id} not found",
+        )
+
+    service = get_ownership_graph_service(db)
+    result = service.partnership_capital_accounts_report(partnership_id, as_of_date)
+
+    capital_accounts = [
+        CapitalAccountResponse(
+            account_id=ca["account_id"],
+            account_name=ca["account_name"],
+            balance=str(ca["balance"]),
+        )
+        for ca in result["capital_accounts"]
+    ]
+
+    return PartnershipCapitalAccountsResponse(
+        partnership_id=result["partnership_id"],
+        partnership_name=result["partnership_name"],
+        as_of_date=as_of_date,
+        capital_accounts=capital_accounts,
+        total_capital=str(result["total_capital"]),
     )
