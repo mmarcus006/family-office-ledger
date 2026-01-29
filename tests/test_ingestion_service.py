@@ -13,6 +13,7 @@ Tests cover:
 from collections.abc import Iterable
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
@@ -1689,3 +1690,224 @@ class TestEdgeCases:
             assert ledger_service.posted_transactions[0].is_balanced, (
                 f"{method_name} unbalanced"
             )
+
+
+# =============================================================================
+# Real File Integration Tests
+# =============================================================================
+
+
+class TestRealFileIntegration:
+    """Integration tests with real bank statement files.
+
+    These tests ingest actual bank files and verify that the ingestion service
+    correctly processes real file formats and creates appropriate entities,
+    accounts, and transactions.
+    """
+
+    @pytest.mark.skipif(
+        not Path(
+            "/mnt/c/Users/Miller/Downloads/Transactions_CITI_01_28_2026_YTD.csv"
+        ).exists(),
+        reason="Real CITI file not available",
+    )
+    def test_ingest_real_citi_file(self) -> None:
+        """Ingest real CITI CSV file and verify counts."""
+        # Create in-memory repositories
+        entity_repo = MockEntityRepository()
+        account_repo = MockAccountRepository()
+        security_repo = MockSecurityRepository()
+        position_repo = MockPositionRepository()
+        tax_lot_repo = MockTaxLotRepository()
+        txn_repo = MockTransactionRepository()
+
+        # Create services
+        ledger_service = MockLedgerService(txn_repo, account_repo)
+        lot_matching_service = MockLotMatchingService(tax_lot_repo)
+        classifier = TransactionClassifier()
+
+        # Create ingestion service
+        service = IngestionService(
+            entity_repo=entity_repo,
+            account_repo=account_repo,
+            security_repo=security_repo,
+            position_repo=position_repo,
+            tax_lot_repo=tax_lot_repo,
+            ledger_service=ledger_service,
+            lot_matching_service=lot_matching_service,
+            transaction_classifier=classifier,
+        )
+
+        # Ingest file
+        file_path = "/mnt/c/Users/Miller/Downloads/Transactions_CITI_01_28_2026_YTD.csv"
+        result = service.ingest_file(file_path)
+
+        # Print summary
+        print(f"\n{'=' * 60}")
+        print(f"CITI File Ingestion Summary")
+        print(f"{'=' * 60}")
+        print(f"File: {file_path}")
+        print(f"Transactions ingested: {result.transaction_count}")
+        print(f"Entities created: {result.entity_count}")
+        print(f"Accounts created: {result.account_count}")
+        print(f"Tax lots created: {result.tax_lot_count}")
+        print(f"Errors: {len(result.errors)}")
+
+        if result.type_breakdown:
+            print(f"\nTransaction Type Breakdown:")
+            for txn_type, count in sorted(
+                result.type_breakdown.items(), key=lambda x: x[1], reverse=True
+            ):
+                print(f"  {txn_type.value}: {count}")
+
+        if result.errors:
+            print(f"\nErrors encountered:")
+            for error in result.errors[:5]:  # Show first 5 errors
+                print(f"  - {error}")
+
+        # Verify basic counts
+        assert result.transaction_count > 0, "No transactions ingested"
+        assert result.entity_count > 0, "No entities created"
+        assert result.account_count > 0, "No accounts created"
+        # CITI file should have ~144 transactions
+        assert result.transaction_count >= 100, (
+            f"Expected ~144 transactions, got {result.transaction_count}"
+        )
+
+    @pytest.mark.skipif(
+        not Path(
+            "/mnt/c/Users/Miller/Downloads/Transactions_UBS_01_28_2026_YTD.csv"
+        ).exists(),
+        reason="Real UBS file not available",
+    )
+    def test_ingest_real_ubs_file(self) -> None:
+        """Ingest real UBS CSV file and verify counts."""
+        # Create in-memory repositories
+        entity_repo = MockEntityRepository()
+        account_repo = MockAccountRepository()
+        security_repo = MockSecurityRepository()
+        position_repo = MockPositionRepository()
+        tax_lot_repo = MockTaxLotRepository()
+        txn_repo = MockTransactionRepository()
+
+        # Create services
+        ledger_service = MockLedgerService(txn_repo, account_repo)
+        lot_matching_service = MockLotMatchingService(tax_lot_repo)
+        classifier = TransactionClassifier()
+
+        # Create ingestion service
+        service = IngestionService(
+            entity_repo=entity_repo,
+            account_repo=account_repo,
+            security_repo=security_repo,
+            position_repo=position_repo,
+            tax_lot_repo=tax_lot_repo,
+            ledger_service=ledger_service,
+            lot_matching_service=lot_matching_service,
+            transaction_classifier=classifier,
+        )
+
+        # Ingest file
+        file_path = "/mnt/c/Users/Miller/Downloads/Transactions_UBS_01_28_2026_YTD.csv"
+        result = service.ingest_file(file_path)
+
+        # Print summary
+        print(f"\n{'=' * 60}")
+        print(f"UBS File Ingestion Summary")
+        print(f"{'=' * 60}")
+        print(f"File: {file_path}")
+        print(f"Transactions ingested: {result.transaction_count}")
+        print(f"Entities created: {result.entity_count}")
+        print(f"Accounts created: {result.account_count}")
+        print(f"Tax lots created: {result.tax_lot_count}")
+        print(f"Errors: {len(result.errors)}")
+
+        if result.type_breakdown:
+            print(f"\nTransaction Type Breakdown:")
+            for txn_type, count in sorted(
+                result.type_breakdown.items(), key=lambda x: x[1], reverse=True
+            ):
+                print(f"  {txn_type.value}: {count}")
+
+        if result.errors:
+            print(f"\nErrors encountered:")
+            for error in result.errors[:5]:  # Show first 5 errors
+                print(f"  - {error}")
+
+        # Verify basic counts
+        assert result.transaction_count > 0, "No transactions ingested"
+        assert result.entity_count > 0, "No entities created"
+        assert result.account_count > 0, "No accounts created"
+        # UBS file should have ~758 transactions
+        assert result.transaction_count >= 500, (
+            f"Expected ~758 transactions, got {result.transaction_count}"
+        )
+
+    @pytest.mark.skipif(
+        not Path(
+            "/mnt/c/Users/Miller/Downloads/Transactions_MS_01_28_2026_YTD.xlsx"
+        ).exists(),
+        reason="Real Morgan Stanley file not available",
+    )
+    def test_ingest_real_ms_file(self) -> None:
+        """Ingest real Morgan Stanley Excel file and verify counts."""
+        # Create in-memory repositories
+        entity_repo = MockEntityRepository()
+        account_repo = MockAccountRepository()
+        security_repo = MockSecurityRepository()
+        position_repo = MockPositionRepository()
+        tax_lot_repo = MockTaxLotRepository()
+        txn_repo = MockTransactionRepository()
+
+        # Create services
+        ledger_service = MockLedgerService(txn_repo, account_repo)
+        lot_matching_service = MockLotMatchingService(tax_lot_repo)
+        classifier = TransactionClassifier()
+
+        # Create ingestion service
+        service = IngestionService(
+            entity_repo=entity_repo,
+            account_repo=account_repo,
+            security_repo=security_repo,
+            position_repo=position_repo,
+            tax_lot_repo=tax_lot_repo,
+            ledger_service=ledger_service,
+            lot_matching_service=lot_matching_service,
+            transaction_classifier=classifier,
+        )
+
+        # Ingest file
+        file_path = "/mnt/c/Users/Miller/Downloads/Transactions_MS_01_28_2026_YTD.xlsx"
+        result = service.ingest_file(file_path)
+
+        # Print summary
+        print(f"\n{'=' * 60}")
+        print(f"Morgan Stanley File Ingestion Summary")
+        print(f"{'=' * 60}")
+        print(f"File: {file_path}")
+        print(f"Transactions ingested: {result.transaction_count}")
+        print(f"Entities created: {result.entity_count}")
+        print(f"Accounts created: {result.account_count}")
+        print(f"Tax lots created: {result.tax_lot_count}")
+        print(f"Errors: {len(result.errors)}")
+
+        if result.type_breakdown:
+            print(f"\nTransaction Type Breakdown:")
+            for txn_type, count in sorted(
+                result.type_breakdown.items(), key=lambda x: x[1], reverse=True
+            ):
+                print(f"  {txn_type.value}: {count}")
+
+        if result.errors:
+            print(f"\nErrors encountered:")
+            for error in result.errors[:5]:  # Show first 5 errors
+                print(f"  - {error}")
+
+        # Verify basic counts
+        assert result.transaction_count > 0, "No transactions ingested"
+        assert result.entity_count > 0, "No entities created"
+        assert result.account_count > 0, "No accounts created"
+        # Morgan Stanley file should have ~216 transactions
+        assert result.transaction_count >= 150, (
+            f"Expected ~216 transactions, got {result.transaction_count}"
+        )
