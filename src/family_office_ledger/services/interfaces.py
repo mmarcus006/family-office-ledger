@@ -1,13 +1,22 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from family_office_ledger.domain.exchange_rates import ExchangeRate
 from family_office_ledger.domain.transactions import TaxLot, Transaction
 from family_office_ledger.domain.value_objects import LotSelection, Money, Quantity
+
+if TYPE_CHECKING:
+    from family_office_ledger.domain.budgets import (
+        Budget,
+        BudgetLineItem,
+        BudgetVariance,
+    )
 
 
 @dataclass
@@ -295,6 +304,15 @@ class ReportingService(ABC):
     ) -> str:
         pass
 
+    @abstractmethod
+    def budget_report(
+        self,
+        entity_id: UUID,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, Any]:
+        pass
+
 
 class CurrencyService(ABC):
     @abstractmethod
@@ -385,5 +403,71 @@ class ExpenseService(ABC):
         self,
         entity_id: UUID,
         lookback_months: int = 3,
+    ) -> list[dict[str, Any]]:
+        pass
+
+
+class BudgetService(ABC):
+    @abstractmethod
+    def create_budget(
+        self,
+        name: str,
+        entity_id: UUID,
+        period_type: str,  # BudgetPeriodType value
+        start_date: date,
+        end_date: date,
+    ) -> Budget:
+        pass
+
+    @abstractmethod
+    def get_budget(self, budget_id: UUID) -> Budget | None:
+        pass
+
+    @abstractmethod
+    def update_budget(self, budget: Budget) -> None:
+        pass
+
+    @abstractmethod
+    def delete_budget(self, budget_id: UUID) -> None:
+        pass
+
+    @abstractmethod
+    def add_line_item(
+        self,
+        budget_id: UUID,
+        category: str,
+        budgeted_amount: Money,
+        account_id: UUID | None = None,
+        notes: str = "",
+    ) -> BudgetLineItem:
+        pass
+
+    @abstractmethod
+    def get_line_items(self, budget_id: UUID) -> list[BudgetLineItem]:
+        pass
+
+    @abstractmethod
+    def calculate_variance(
+        self,
+        budget_id: UUID,
+        actual_expenses: dict[str, Money],
+    ) -> list[BudgetVariance]:
+        pass
+
+    @abstractmethod
+    def get_budget_vs_actual(
+        self,
+        entity_id: UUID,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def check_alerts(
+        self,
+        budget_id: UUID,
+        actual_expenses: dict[str, Money],
+        thresholds: list[int] | None = None,  # default [80, 90, 100, 110]
     ) -> list[dict[str, Any]]:
         pass

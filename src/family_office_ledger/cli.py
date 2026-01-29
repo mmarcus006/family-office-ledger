@@ -6,9 +6,13 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
+from family_office_ledger.domain.exchange_rates import ExchangeRate, ExchangeRateSource
 from family_office_ledger.domain.reconciliation import ReconciliationMatchStatus
+from family_office_ledger.domain.transfer_matching import TransferMatchStatus
+from family_office_ledger.domain.vendors import Vendor
 from family_office_ledger.repositories.sqlite import (
     SQLiteAccountRepository,
+    SQLiteBudgetRepository,
     SQLiteDatabase,
     SQLiteEntityRepository,
     SQLiteExchangeRateRepository,
@@ -19,32 +23,30 @@ from family_office_ledger.repositories.sqlite import (
     SQLiteTransactionRepository,
     SQLiteVendorRepository,
 )
+from family_office_ledger.services.budget import BudgetServiceImpl
+from family_office_ledger.services.currency import (
+    CurrencyServiceImpl,
+    ExchangeRateNotFoundError,
+)
 from family_office_ledger.services.expense import ExpenseServiceImpl
-from family_office_ledger.domain.vendors import Vendor
 from family_office_ledger.services.ingestion import IngestionService
 from family_office_ledger.services.ledger import LedgerServiceImpl
 from family_office_ledger.services.lot_matching import LotMatchingServiceImpl
+from family_office_ledger.services.portfolio_analytics import PortfolioAnalyticsService
+from family_office_ledger.services.qsbs import QSBSService, SecurityNotFoundError
 from family_office_ledger.services.reconciliation import (
     MatchNotFoundError,
     ReconciliationServiceImpl,
     SessionExistsError,
     SessionNotFoundError,
 )
+from family_office_ledger.services.tax_documents import TaxDocumentService
 from family_office_ledger.services.transaction_classifier import TransactionClassifier
 from family_office_ledger.services.transfer_matching import (
     TransferMatchingService,
     TransferMatchNotFoundError,
     TransferSessionNotFoundError,
 )
-from family_office_ledger.domain.transfer_matching import TransferMatchStatus
-from family_office_ledger.services.qsbs import QSBSService, SecurityNotFoundError
-from family_office_ledger.services.tax_documents import TaxDocumentService
-from family_office_ledger.services.portfolio_analytics import PortfolioAnalyticsService
-from family_office_ledger.services.currency import (
-    CurrencyServiceImpl,
-    ExchangeRateNotFoundError,
-)
-from family_office_ledger.domain.exchange_rates import ExchangeRate, ExchangeRateSource
 
 
 def get_default_db_path() -> Path:
@@ -182,14 +184,14 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         result = ingestion_service.ingest_file(str(file_path), default_entity)
 
         # Print results
-        print(f"✓ Ingestion complete")
+        print("✓ Ingestion complete")
         print(f"  Transactions: {result.transaction_count}")
         print(f"  Entities: {result.entity_count}")
         print(f"  Accounts: {result.account_count}")
         print(f"  Tax lots: {result.tax_lot_count}")
 
         if result.type_breakdown:
-            print(f"  Transaction types:")
+            print("  Transaction types:")
             for txn_type, count in sorted(result.type_breakdown.items()):
                 print(f"    - {txn_type.value}: {count}")
 
@@ -942,10 +944,10 @@ def cmd_tax_generate(args: argparse.Namespace) -> int:
 
         print(f"Tax Documents for {summary.entity_name} - {summary.tax_year}")
         print("=" * 60)
-        print(f"\nForm 8949 Summary:")
+        print("\nForm 8949 Summary:")
         print(f"  Short-term transactions: {summary.short_term_transactions}")
         print(f"  Long-term transactions: {summary.long_term_transactions}")
-        print(f"\nSchedule D Summary:")
+        print("\nSchedule D Summary:")
         print(
             f"  Net Short-term Gain/Loss: ${summary.total_short_term_gain.amount:,.2f}"
         )
@@ -996,13 +998,13 @@ def cmd_tax_summary(args: argparse.Namespace) -> int:
 
         print(f"Tax Summary - {summary.entity_name} - {summary.tax_year}")
         print("=" * 50)
-        print(f"\nShort-Term Capital Gains:")
+        print("\nShort-Term Capital Gains:")
         print(f"  Transactions: {summary.short_term_transactions}")
         print(f"  Proceeds: ${summary.total_short_term_proceeds.amount:,.2f}")
         print(f"  Cost Basis: ${summary.total_short_term_cost_basis.amount:,.2f}")
         print(f"  Gain/Loss: ${summary.total_short_term_gain.amount:,.2f}")
 
-        print(f"\nLong-Term Capital Gains:")
+        print("\nLong-Term Capital Gains:")
         print(f"  Transactions: {summary.long_term_transactions}")
         print(f"  Proceeds: ${summary.total_long_term_proceeds.amount:,.2f}")
         print(f"  Cost Basis: ${summary.total_long_term_cost_basis.amount:,.2f}")
@@ -1148,7 +1150,7 @@ def cmd_portfolio_concentration(args: argparse.Namespace) -> int:
             )
 
         print("-" * 70)
-        print(f"\nConcentration Metrics:")
+        print("\nConcentration Metrics:")
         print(f"  Top 5 Holdings: {report.top_5_concentration:.2f}%")
         print(f"  Top 10 Holdings: {report.top_10_concentration:.2f}%")
         print(f"  Largest Single Holding: {report.largest_single_holding:.2f}%")
@@ -1329,6 +1331,7 @@ def cmd_currency_rates_latest(args: argparse.Namespace) -> int:
 def cmd_currency_convert(args: argparse.Namespace) -> int:
     """Convert amount between currencies."""
     from datetime import datetime as dt
+
     from family_office_ledger.domain.value_objects import Money
 
     db_path = Path(args.database) if args.database else get_default_db_path()
@@ -1610,7 +1613,7 @@ def cmd_vendor_add(args: argparse.Namespace) -> int:
         if vendor.tax_id:
             print(f"  Tax ID: {vendor.tax_id}")
         if vendor.is_1099_eligible:
-            print(f"  1099 Eligible: Yes")
+            print("  1099 Eligible: Yes")
         return 0
 
     except Exception as e:
@@ -1751,6 +1754,252 @@ def cmd_vendor_search(args: argparse.Namespace) -> int:
             print(f"{str(vendor.id):<40} {vendor.name[:28]:<30} {cat:<15} {is_1099:>5}")
 
         print(f"\nFound: {len(vendors)} vendor(s)")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_budget_create(args: argparse.Namespace) -> int:
+    """Create a new budget."""
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        start_date = dt.strptime(args.start_date, "%Y-%m-%d").date()
+        end_date = dt.strptime(args.end_date, "%Y-%m-%d").date()
+
+        db = SQLiteDatabase(str(db_path))
+        budget_repo = SQLiteBudgetRepository(db)
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        vendor_repo = SQLiteVendorRepository(db)
+        expense_service = ExpenseServiceImpl(
+            transaction_repo, account_repo, vendor_repo
+        )
+        service = BudgetServiceImpl(budget_repo, expense_service)
+
+        budget = service.create_budget(
+            name=args.name,
+            entity_id=UUID(args.entity_id),
+            period_type=args.period_type,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        print(f"Created budget: {budget.id}")
+        print(f"  Name: {budget.name}")
+        print(f"  Entity: {budget.entity_id}")
+        print(f"  Period: {budget.period_type.value}")
+        print(f"  Date Range: {budget.start_date} to {budget.end_date}")
+        return 0
+
+    except ValueError as e:
+        print(f"Error: Invalid input: {e}")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_budget_list(args: argparse.Namespace) -> int:
+    """List budgets for an entity."""
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        budget_repo = SQLiteBudgetRepository(db)
+
+        include_inactive = (
+            args.include_inactive if hasattr(args, "include_inactive") else False
+        )
+        budgets = list(
+            budget_repo.list_by_entity(UUID(args.entity_id), include_inactive)
+        )
+
+        if not budgets:
+            print("No budgets found.")
+            return 0
+
+        print(f"Budgets for entity {args.entity_id}:")
+        print("=" * 70)
+        for b in budgets:
+            status = "Active" if b.is_active else "Inactive"
+            print(f"  {b.id}")
+            print(f"    Name: {b.name}")
+            print(f"    Period: {b.period_type.value} ({b.start_date} to {b.end_date})")
+            print(f"    Status: {status}")
+            print()
+
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_budget_add_line(args: argparse.Namespace) -> int:
+    """Add a line item to a budget."""
+    from family_office_ledger.domain.value_objects import Money
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        budget_repo = SQLiteBudgetRepository(db)
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        vendor_repo = SQLiteVendorRepository(db)
+        expense_service = ExpenseServiceImpl(
+            transaction_repo, account_repo, vendor_repo
+        )
+        service = BudgetServiceImpl(budget_repo, expense_service)
+
+        amount = Money(Decimal(args.amount), args.currency)
+        account_id = UUID(args.account_id) if args.account_id else None
+
+        line_item = service.add_line_item(
+            budget_id=UUID(args.budget_id),
+            category=args.category,
+            budgeted_amount=amount,
+            account_id=account_id,
+            notes=args.notes or "",
+        )
+
+        print(f"Added line item: {line_item.id}")
+        print(f"  Category: {line_item.category}")
+        print(f"  Amount: {line_item.budgeted_amount}")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_budget_variance(args: argparse.Namespace) -> int:
+    """Show budget variance report."""
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        start_date = dt.strptime(args.start_date, "%Y-%m-%d").date()
+        end_date = dt.strptime(args.end_date, "%Y-%m-%d").date()
+
+        db = SQLiteDatabase(str(db_path))
+        budget_repo = SQLiteBudgetRepository(db)
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        vendor_repo = SQLiteVendorRepository(db)
+        expense_service = ExpenseServiceImpl(
+            transaction_repo, account_repo, vendor_repo
+        )
+        service = BudgetServiceImpl(budget_repo, expense_service)
+
+        result = service.get_budget_vs_actual(
+            entity_id=UUID(args.entity_id),
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        if result["budget"] is None:
+            print("No active budget found for the specified entity and date range.")
+            return 0
+
+        budget = result["budget"]
+        variances = result["variances"]
+
+        print(f"Budget Variance Report: {budget.name}")
+        print("=" * 70)
+        print(f"Date Range: {start_date} to {end_date}")
+        print(
+            f"\n{'Category':<20} {'Budgeted':>12} {'Actual':>12} {'Variance':>12} {'%':>8}"
+        )
+        print("-" * 66)
+
+        for v in variances:
+            status = "OVER" if v.is_over_budget else ""
+            print(
+                f"{v.category:<20} ${v.budgeted.amount:>11,.2f} ${v.actual.amount:>11,.2f} ${v.variance.amount:>11,.2f} {v.variance_percent:>7}% {status}"
+            )
+
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_budget_alerts(args: argparse.Namespace) -> int:
+    """Show budget alerts."""
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        start_date = dt.strptime(args.start_date, "%Y-%m-%d").date()
+        end_date = dt.strptime(args.end_date, "%Y-%m-%d").date()
+
+        db = SQLiteDatabase(str(db_path))
+        budget_repo = SQLiteBudgetRepository(db)
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        vendor_repo = SQLiteVendorRepository(db)
+        expense_service = ExpenseServiceImpl(
+            transaction_repo, account_repo, vendor_repo
+        )
+        service = BudgetServiceImpl(budget_repo, expense_service)
+
+        # Get active budget
+        budget = budget_repo.get_active_for_date(UUID(args.entity_id), start_date)
+        if budget is None:
+            print("No active budget found.")
+            return 0
+
+        # Get actual expenses
+        actual = expense_service.get_expenses_by_category(
+            entity_ids=[UUID(args.entity_id)],
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        # Check alerts
+        thresholds = (
+            [int(t) for t in args.thresholds.split(",")] if args.thresholds else None
+        )
+        alerts = service.check_alerts(budget.id, actual, thresholds)
+
+        if not alerts:
+            print("No budget alerts.")
+            return 0
+
+        print(f"Budget Alerts: {budget.name}")
+        print("=" * 70)
+
+        for alert in alerts:
+            status_icon = "⚠️" if alert["status"] == "warning" else "🚨"
+            print(
+                f"{status_icon} {alert['category']}: {alert['percent_used']:.1f}% of budget used"
+            )
+            print(f"     Budgeted: {alert['budgeted']} | Actual: {alert['actual']}")
+
         return 0
 
     except Exception as e:
@@ -2314,6 +2563,89 @@ def main(argv: list[str] | None = None) -> int:
     vendor_search_parser.add_argument("--name", required=True, help="Name pattern")
     vendor_search_parser.set_defaults(func=cmd_vendor_search)
 
+    # budget command group
+    budget_parser = subparsers.add_parser("budget", help="Budget management commands")
+    budget_subparsers = budget_parser.add_subparsers(
+        dest="budget_command", help="Budget subcommands"
+    )
+
+    # budget create
+    budget_create_parser = budget_subparsers.add_parser(
+        "create", help="Create a new budget"
+    )
+    budget_create_parser.add_argument("--name", required=True, help="Budget name")
+    budget_create_parser.add_argument("--entity-id", required=True, help="Entity ID")
+    budget_create_parser.add_argument(
+        "--period-type",
+        required=True,
+        choices=["monthly", "quarterly", "annual", "custom"],
+        help="Budget period type",
+    )
+    budget_create_parser.add_argument(
+        "--start-date", required=True, help="Start date (YYYY-MM-DD)"
+    )
+    budget_create_parser.add_argument(
+        "--end-date", required=True, help="End date (YYYY-MM-DD)"
+    )
+    budget_create_parser.set_defaults(func=cmd_budget_create)
+
+    # budget list
+    budget_list_parser = budget_subparsers.add_parser(
+        "list", help="List budgets for an entity"
+    )
+    budget_list_parser.add_argument("--entity-id", required=True, help="Entity ID")
+    budget_list_parser.add_argument(
+        "--include-inactive", action="store_true", help="Include inactive budgets"
+    )
+    budget_list_parser.set_defaults(func=cmd_budget_list)
+
+    # budget add-line
+    budget_add_line_parser = budget_subparsers.add_parser(
+        "add-line", help="Add a line item to a budget"
+    )
+    budget_add_line_parser.add_argument("--budget-id", required=True, help="Budget ID")
+    budget_add_line_parser.add_argument(
+        "--category", required=True, help="Expense category"
+    )
+    budget_add_line_parser.add_argument(
+        "--amount", required=True, help="Budgeted amount"
+    )
+    budget_add_line_parser.add_argument(
+        "--currency", default="USD", help="Currency (default: USD)"
+    )
+    budget_add_line_parser.add_argument("--account-id", help="Account ID (optional)")
+    budget_add_line_parser.add_argument("--notes", help="Notes (optional)")
+    budget_add_line_parser.set_defaults(func=cmd_budget_add_line)
+
+    # budget variance
+    budget_variance_parser = budget_subparsers.add_parser(
+        "variance", help="Show budget variance report"
+    )
+    budget_variance_parser.add_argument("--entity-id", required=True, help="Entity ID")
+    budget_variance_parser.add_argument(
+        "--start-date", required=True, help="Start date (YYYY-MM-DD)"
+    )
+    budget_variance_parser.add_argument(
+        "--end-date", required=True, help="End date (YYYY-MM-DD)"
+    )
+    budget_variance_parser.set_defaults(func=cmd_budget_variance)
+
+    # budget alerts
+    budget_alerts_parser = budget_subparsers.add_parser(
+        "alerts", help="Show budget alerts"
+    )
+    budget_alerts_parser.add_argument("--entity-id", required=True, help="Entity ID")
+    budget_alerts_parser.add_argument(
+        "--start-date", required=True, help="Start date (YYYY-MM-DD)"
+    )
+    budget_alerts_parser.add_argument(
+        "--end-date", required=True, help="End date (YYYY-MM-DD)"
+    )
+    budget_alerts_parser.add_argument(
+        "--thresholds", help="Comma-separated thresholds (default: 80,90,100,110)"
+    )
+    budget_alerts_parser.set_defaults(func=cmd_budget_alerts)
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -2366,6 +2698,12 @@ def main(argv: list[str] | None = None) -> int:
         not hasattr(args, "vendor_command") or args.vendor_command is None
     ):
         vendor_parser.print_help()
+        return 0
+
+    if args.command == "budget" and (
+        not hasattr(args, "budget_command") or args.budget_command is None
+    ):
+        budget_parser.print_help()
         return 0
 
     result: int = args.func(args)

@@ -1059,3 +1059,152 @@ class TestReportingServiceIntegration:
             with open(json_path) as f:
                 loaded = json.load(f)
                 assert loaded["report_name"] == "Net Worth Report"
+
+
+class TestBudgetReport:
+    def test_budget_report_no_service(
+        self,
+        entity_repo: SQLiteEntityRepository,
+        account_repo: SQLiteAccountRepository,
+        transaction_repo: SQLiteTransactionRepository,
+        position_repo: SQLitePositionRepository,
+        tax_lot_repo: SQLiteTaxLotRepository,
+        security_repo: SQLiteSecurityRepository,
+    ) -> None:
+        reporting = ReportingServiceImpl(
+            entity_repo=entity_repo,
+            account_repo=account_repo,
+            transaction_repo=transaction_repo,
+            position_repo=position_repo,
+            tax_lot_repo=tax_lot_repo,
+            security_repo=security_repo,
+            budget_service=None,
+        )
+
+        entity = Entity(name="Test Entity", entity_type=EntityType.LLC)
+        entity_repo.add(entity)
+
+        result = reporting.budget_report(
+            entity_id=entity.id,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 12, 31),
+        )
+
+        assert result["report_name"] == "Budget Report"
+        assert "error" in result["totals"]
+
+    def test_budget_report_no_active_budget(
+        self,
+        db: SQLiteDatabase,
+        entity_repo: SQLiteEntityRepository,
+        account_repo: SQLiteAccountRepository,
+        transaction_repo: SQLiteTransactionRepository,
+        position_repo: SQLitePositionRepository,
+        tax_lot_repo: SQLiteTaxLotRepository,
+        security_repo: SQLiteSecurityRepository,
+    ) -> None:
+        from family_office_ledger.repositories.sqlite import (
+            SQLiteBudgetRepository,
+            SQLiteVendorRepository,
+        )
+        from family_office_ledger.services.budget import BudgetServiceImpl
+        from family_office_ledger.services.expense import ExpenseServiceImpl
+
+        budget_repo = SQLiteBudgetRepository(db)
+        vendor_repo = SQLiteVendorRepository(db)
+        expense_service = ExpenseServiceImpl(
+            transaction_repo, account_repo, vendor_repo
+        )
+        budget_service = BudgetServiceImpl(budget_repo, expense_service)
+
+        reporting = ReportingServiceImpl(
+            entity_repo=entity_repo,
+            account_repo=account_repo,
+            transaction_repo=transaction_repo,
+            position_repo=position_repo,
+            tax_lot_repo=tax_lot_repo,
+            security_repo=security_repo,
+            budget_service=budget_service,
+        )
+
+        entity = Entity(name="Test Entity", entity_type=EntityType.LLC)
+        entity_repo.add(entity)
+
+        result = reporting.budget_report(
+            entity_id=entity.id,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 12, 31),
+        )
+
+        assert result["report_name"] == "Budget Report"
+        assert "message" in result["totals"]
+        assert result["data"] == []
+
+    def test_budget_report_with_variances(
+        self,
+        db: SQLiteDatabase,
+        entity_repo: SQLiteEntityRepository,
+        account_repo: SQLiteAccountRepository,
+        transaction_repo: SQLiteTransactionRepository,
+        position_repo: SQLitePositionRepository,
+        tax_lot_repo: SQLiteTaxLotRepository,
+        security_repo: SQLiteSecurityRepository,
+    ) -> None:
+        from family_office_ledger.repositories.sqlite import (
+            SQLiteBudgetRepository,
+            SQLiteVendorRepository,
+        )
+        from family_office_ledger.services.budget import BudgetServiceImpl
+        from family_office_ledger.services.expense import ExpenseServiceImpl
+
+        budget_repo = SQLiteBudgetRepository(db)
+        vendor_repo = SQLiteVendorRepository(db)
+        expense_service = ExpenseServiceImpl(
+            transaction_repo, account_repo, vendor_repo
+        )
+        budget_service = BudgetServiceImpl(budget_repo, expense_service)
+
+        reporting = ReportingServiceImpl(
+            entity_repo=entity_repo,
+            account_repo=account_repo,
+            transaction_repo=transaction_repo,
+            position_repo=position_repo,
+            tax_lot_repo=tax_lot_repo,
+            security_repo=security_repo,
+            budget_service=budget_service,
+        )
+
+        entity = Entity(name="Test Entity", entity_type=EntityType.LLC)
+        entity_repo.add(entity)
+
+        budget = budget_service.create_budget(
+            name="Q1 2024",
+            entity_id=entity.id,
+            period_type="quarterly",
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 3, 31),
+        )
+
+        budget_service.add_line_item(
+            budget_id=budget.id,
+            category="software",
+            budgeted_amount=Money(Decimal("5000")),
+        )
+        budget_service.add_line_item(
+            budget_id=budget.id,
+            category="travel",
+            budgeted_amount=Money(Decimal("3000")),
+        )
+
+        result = reporting.budget_report(
+            entity_id=entity.id,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 3, 31),
+        )
+
+        assert result["report_name"] == "Budget Report"
+        assert result["budget_name"] == "Q1 2024"
+        assert result["period_type"] == "quarterly"
+        assert len(result["data"]) == 2
+        assert result["totals"]["total_budgeted"] == "8000"
+        assert result["totals"]["total_actual"] == "0"

@@ -3,6 +3,7 @@ from collections.abc import Iterable
 from datetime import date
 from uuid import UUID
 
+from family_office_ledger.domain.budgets import Budget, BudgetLineItem
 from family_office_ledger.domain.entities import Account, Entity, Position, Security
 from family_office_ledger.domain.exchange_rates import ExchangeRate
 from family_office_ledger.domain.reconciliation import ReconciliationSession
@@ -343,4 +344,48 @@ class VendorRepository(ABC):
     @abstractmethod
     def get_by_tax_id(self, tax_id: str) -> Vendor | None:
         """Get vendor by tax ID."""
+        pass
+
+
+class BudgetRepository(ABC):
+    @abstractmethod
+    def add(self, budget: Budget) -> None:
+        pass
+
+    @abstractmethod
+    def get(self, budget_id: UUID) -> Budget | None:
+        pass
+
+    @abstractmethod
+    def update(self, budget: Budget) -> None:
+        pass
+
+    @abstractmethod
+    def delete(self, budget_id: UUID) -> None:
+        pass
+
+    @abstractmethod
+    def list_by_entity(
+        self, entity_id: UUID, include_inactive: bool = False
+    ) -> Iterable[Budget]:
+        pass
+
+    @abstractmethod
+    def get_active_for_date(self, entity_id: UUID, as_of_date: date) -> Budget | None:
+        pass
+
+    @abstractmethod
+    def add_line_item(self, line_item: BudgetLineItem) -> None:
+        pass
+
+    @abstractmethod
+    def get_line_items(self, budget_id: UUID) -> Iterable[BudgetLineItem]:
+        pass
+
+    @abstractmethod
+    def update_line_item(self, line_item: BudgetLineItem) -> None:
+        pass
+
+    @abstractmethod
+    def delete_line_item(self, line_item_id: UUID) -> None:
         pass

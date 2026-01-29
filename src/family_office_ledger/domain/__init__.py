@@ -4,6 +4,12 @@ from family_office_ledger.domain.audit import (
     AuditEntry,
     AuditLogSummary,
 )
+from family_office_ledger.domain.budgets import (
+    Budget,
+    BudgetLineItem,
+    BudgetPeriodType,
+    BudgetVariance,
+)
 from family_office_ledger.domain.corporate_actions import CorporateAction, Price
 from family_office_ledger.domain.documents import Document, TaxDocLine
 from family_office_ledger.domain.entities import Account, Entity, Position, Security
@@ -35,6 +41,10 @@ __all__ = [
     "AuditEntityType",
     "AuditEntry",
     "AuditLogSummary",
+    "Budget",
+    "BudgetLineItem",
+    "BudgetPeriodType",
+    "BudgetVariance",
     "CorporateAction",
     "CorporateActionType",
     "Document",

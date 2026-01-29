@@ -16,6 +16,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 if not SKIP_POSTGRES:
+    from family_office_ledger.domain.budgets import (
+        Budget,
+        BudgetLineItem,
+        BudgetPeriodType,
+    )
     from family_office_ledger.domain.entities import (
         Account,
         Entity,
@@ -39,6 +44,7 @@ if not SKIP_POSTGRES:
     from family_office_ledger.domain.vendors import Vendor
     from family_office_ledger.repositories.postgres import (
         PostgresAccountRepository,
+        PostgresBudgetRepository,
         PostgresDatabase,
         PostgresEntityRepository,
         PostgresExchangeRateRepository,
@@ -63,6 +69,8 @@ def db() -> "PostgresDatabase":
         cur.execute("DELETE FROM transactions")
         cur.execute("DELETE FROM positions")
         cur.execute("DELETE FROM securities")
+        cur.execute("DELETE FROM budget_line_items")
+        cur.execute("DELETE FROM budgets")
         cur.execute("DELETE FROM accounts")
         cur.execute("DELETE FROM entities")
         cur.execute("DELETE FROM exchange_rates")
@@ -109,6 +117,11 @@ def exchange_rate_repo(db: "PostgresDatabase") -> "PostgresExchangeRateRepositor
 @pytest.fixture
 def vendor_repo(db: "PostgresDatabase") -> "PostgresVendorRepository":
     return PostgresVendorRepository(db)
+
+
+@pytest.fixture
+def budget_repo(db: "PostgresDatabase") -> "PostgresBudgetRepository":
+    return PostgresBudgetRepository(db)
 
 
 # ===== Entity Repository Tests =====
@@ -1808,3 +1821,345 @@ class TestPostgresVendorRepository:
         assert retrieved is not None
         assert retrieved.default_account_id == account.id
         assert retrieved.default_category == "utilities"
+
+
+# ===== Budget Repository Tests =====
+
+
+class TestPostgresBudgetRepository:
+    @pytest.fixture
+    def persisted_entity(self, entity_repo: "PostgresEntityRepository") -> "Entity":
+        entity = Entity(name="Budget Test Entity", entity_type=EntityType.TRUST)
+        entity_repo.add(entity)
+        return entity
+
+    def test_add_and_get_budget(
+        self, budget_repo: "PostgresBudgetRepository", persisted_entity: "Entity"
+    ) -> None:
+        budget = Budget(
+            name="2024 Annual Budget",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.ANNUAL,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 12, 31),
+        )
+
+        budget_repo.add(budget)
+        retrieved = budget_repo.get(budget.id)
+
+        assert retrieved is not None
+        assert retrieved.id == budget.id
+        assert retrieved.name == "2024 Annual Budget"
+        assert retrieved.entity_id == persisted_entity.id
+        assert retrieved.period_type == BudgetPeriodType.ANNUAL
+        assert retrieved.start_date == date(2024, 1, 1)
+        assert retrieved.end_date == date(2024, 12, 31)
+        assert retrieved.is_active is True
+
+    def test_get_nonexistent_budget_returns_none(
+        self, budget_repo: "PostgresBudgetRepository"
+    ) -> None:
+        result = budget_repo.get(uuid4())
+        assert result is None
+
+    def test_update_budget(
+        self, budget_repo: "PostgresBudgetRepository", persisted_entity: "Entity"
+    ) -> None:
+        budget = Budget(
+            name="Old Name",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 31),
+        )
+        budget_repo.add(budget)
+
+        budget.name = "New Name"
+        budget.period_type = BudgetPeriodType.QUARTERLY
+        budget.end_date = date(2024, 3, 31)
+        budget_repo.update(budget)
+
+        retrieved = budget_repo.get(budget.id)
+        assert retrieved is not None
+        assert retrieved.name == "New Name"
+        assert retrieved.period_type == BudgetPeriodType.QUARTERLY
+        assert retrieved.end_date == date(2024, 3, 31)
+
+    def test_delete_budget(
+        self, budget_repo: "PostgresBudgetRepository", persisted_entity: "Entity"
+    ) -> None:
+        budget = Budget(
+            name="To Delete",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 31),
+        )
+        budget_repo.add(budget)
+
+        budget_repo.delete(budget.id)
+
+        assert budget_repo.get(budget.id) is None
+
+    def test_list_by_entity_active_only(
+        self, budget_repo: "PostgresBudgetRepository", persisted_entity: "Entity"
+    ) -> None:
+        active = Budget(
+            name="Active Budget",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.ANNUAL,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 12, 31),
+        )
+        inactive = Budget(
+            name="Inactive Budget",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.ANNUAL,
+            start_date=date(2023, 1, 1),
+            end_date=date(2023, 12, 31),
+            is_active=False,
+        )
+        budget_repo.add(active)
+        budget_repo.add(inactive)
+
+        budgets = list(budget_repo.list_by_entity(persisted_entity.id))
+
+        assert len(budgets) == 1
+        assert budgets[0].name == "Active Budget"
+
+    def test_list_by_entity_including_inactive(
+        self, budget_repo: "PostgresBudgetRepository", persisted_entity: "Entity"
+    ) -> None:
+        active = Budget(
+            name="Active Budget",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.ANNUAL,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 12, 31),
+        )
+        inactive = Budget(
+            name="Inactive Budget",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.ANNUAL,
+            start_date=date(2023, 1, 1),
+            end_date=date(2023, 12, 31),
+            is_active=False,
+        )
+        budget_repo.add(active)
+        budget_repo.add(inactive)
+
+        budgets = list(
+            budget_repo.list_by_entity(persisted_entity.id, include_inactive=True)
+        )
+
+        assert len(budgets) == 2
+
+    def test_get_active_for_date(
+        self, budget_repo: "PostgresBudgetRepository", persisted_entity: "Entity"
+    ) -> None:
+        budget_q1 = Budget(
+            name="Q1 2024",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.QUARTERLY,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 3, 31),
+        )
+        budget_q2 = Budget(
+            name="Q2 2024",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.QUARTERLY,
+            start_date=date(2024, 4, 1),
+            end_date=date(2024, 6, 30),
+        )
+        budget_repo.add(budget_q1)
+        budget_repo.add(budget_q2)
+
+        retrieved = budget_repo.get_active_for_date(
+            persisted_entity.id, date(2024, 2, 15)
+        )
+
+        assert retrieved is not None
+        assert retrieved.name == "Q1 2024"
+
+    def test_get_active_for_date_returns_none_when_no_match(
+        self, budget_repo: "PostgresBudgetRepository", persisted_entity: "Entity"
+    ) -> None:
+        budget = Budget(
+            name="Q1 2024",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.QUARTERLY,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 3, 31),
+        )
+        budget_repo.add(budget)
+
+        result = budget_repo.get_active_for_date(persisted_entity.id, date(2024, 7, 15))
+
+        assert result is None
+
+    def test_add_and_get_line_items(
+        self, budget_repo: "PostgresBudgetRepository", persisted_entity: "Entity"
+    ) -> None:
+        budget = Budget(
+            name="Test Budget",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 31),
+        )
+        budget_repo.add(budget)
+
+        line_item = BudgetLineItem(
+            budget_id=budget.id,
+            category="Utilities",
+            budgeted_amount=Money(Decimal("500.00")),
+            notes="Electric and water",
+        )
+        budget_repo.add_line_item(line_item)
+
+        line_items = list(budget_repo.get_line_items(budget.id))
+
+        assert len(line_items) == 1
+        assert line_items[0].id == line_item.id
+        assert line_items[0].category == "Utilities"
+        assert line_items[0].budgeted_amount == Money(Decimal("500.00"))
+        assert line_items[0].notes == "Electric and water"
+
+    def test_update_line_item(
+        self, budget_repo: "PostgresBudgetRepository", persisted_entity: "Entity"
+    ) -> None:
+        budget = Budget(
+            name="Test Budget",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 31),
+        )
+        budget_repo.add(budget)
+
+        line_item = BudgetLineItem(
+            budget_id=budget.id,
+            category="Utilities",
+            budgeted_amount=Money(Decimal("500.00")),
+        )
+        budget_repo.add_line_item(line_item)
+
+        line_item.budgeted_amount = Money(Decimal("600.00"))
+        line_item.notes = "Updated amount"
+        budget_repo.update_line_item(line_item)
+
+        line_items = list(budget_repo.get_line_items(budget.id))
+        assert len(line_items) == 1
+        assert line_items[0].budgeted_amount == Money(Decimal("600.00"))
+        assert line_items[0].notes == "Updated amount"
+
+    def test_delete_line_item(
+        self, budget_repo: "PostgresBudgetRepository", persisted_entity: "Entity"
+    ) -> None:
+        budget = Budget(
+            name="Test Budget",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 31),
+        )
+        budget_repo.add(budget)
+
+        line_item = BudgetLineItem(
+            budget_id=budget.id,
+            category="Utilities",
+            budgeted_amount=Money(Decimal("500.00")),
+        )
+        budget_repo.add_line_item(line_item)
+
+        budget_repo.delete_line_item(line_item.id)
+
+        line_items = list(budget_repo.get_line_items(budget.id))
+        assert len(line_items) == 0
+
+    def test_line_items_cascade_delete(
+        self, budget_repo: "PostgresBudgetRepository", persisted_entity: "Entity"
+    ) -> None:
+        budget = Budget(
+            name="Test Budget",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 31),
+        )
+        budget_repo.add(budget)
+
+        line_item1 = BudgetLineItem(
+            budget_id=budget.id,
+            category="Utilities",
+            budgeted_amount=Money(Decimal("500.00")),
+        )
+        line_item2 = BudgetLineItem(
+            budget_id=budget.id,
+            category="Groceries",
+            budgeted_amount=Money(Decimal("800.00")),
+        )
+        budget_repo.add_line_item(line_item1)
+        budget_repo.add_line_item(line_item2)
+
+        budget_repo.delete(budget.id)
+
+        line_items = list(budget_repo.get_line_items(budget.id))
+        assert len(line_items) == 0
+
+    def test_budget_preserves_timestamps(
+        self, budget_repo: "PostgresBudgetRepository", persisted_entity: "Entity"
+    ) -> None:
+        budget = Budget(
+            name="Timestamp Test",
+            entity_id=persisted_entity.id,
+            period_type=BudgetPeriodType.ANNUAL,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 12, 31),
+        )
+        original_created = budget.created_at
+        original_updated = budget.updated_at
+
+        budget_repo.add(budget)
+        retrieved = budget_repo.get(budget.id)
+
+        assert retrieved is not None
+        assert retrieved.created_at == original_created
+        assert retrieved.updated_at == original_updated
+
+    def test_line_item_with_account_id(
+        self,
+        budget_repo: "PostgresBudgetRepository",
+        entity_repo: "PostgresEntityRepository",
+        account_repo: "PostgresAccountRepository",
+    ) -> None:
+        entity = Entity(name="Test Entity", entity_type=EntityType.TRUST)
+        entity_repo.add(entity)
+
+        account = Account(
+            name="Utilities Expense",
+            entity_id=entity.id,
+            account_type=AccountType.EXPENSE,
+        )
+        account_repo.add(account)
+
+        budget = Budget(
+            name="Test Budget",
+            entity_id=entity.id,
+            period_type=BudgetPeriodType.MONTHLY,
+            start_date=date(2024, 1, 1),
+            end_date=date(2024, 1, 31),
+        )
+        budget_repo.add(budget)
+
+        line_item = BudgetLineItem(
+            budget_id=budget.id,
+            category="Utilities",
+            budgeted_amount=Money(Decimal("500.00")),
+            account_id=account.id,
+        )
+        budget_repo.add_line_item(line_item)
+
+        line_items = list(budget_repo.get_line_items(budget.id))
+        assert len(line_items) == 1
+        assert line_items[0].account_id == account.id

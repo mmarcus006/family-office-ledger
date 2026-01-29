@@ -19,7 +19,11 @@ from family_office_ledger.repositories.interfaces import (
     TransactionRepository,
 )
 from family_office_ledger.services.currency import ExchangeRateNotFoundError
-from family_office_ledger.services.interfaces import CurrencyService, ReportingService
+from family_office_ledger.services.interfaces import (
+    BudgetService,
+    CurrencyService,
+    ReportingService,
+)
 
 
 class ReportingServiceImpl(ReportingService):
@@ -34,6 +38,7 @@ class ReportingServiceImpl(ReportingService):
         tax_lot_repo: TaxLotRepository,
         security_repo: SecurityRepository,
         currency_service: CurrencyService | None = None,
+        budget_service: BudgetService | None = None,
     ) -> None:
         self._entity_repo = entity_repo
         self._account_repo = account_repo
@@ -42,6 +47,7 @@ class ReportingServiceImpl(ReportingService):
         self._tax_lot_repo = tax_lot_repo
         self._security_repo = security_repo
         self._currency_service = currency_service
+        self._budget_service = budget_service
 
     def _convert_to_base(
         self,
@@ -640,6 +646,88 @@ class ReportingServiceImpl(ReportingService):
             )
 
         return output_path
+
+    def budget_report(
+        self,
+        entity_id: UUID,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, Any]:
+        """Generate budget vs actual report for an entity."""
+        if self._budget_service is None:
+            return {
+                "report_name": "Budget Report",
+                "entity_id": entity_id,
+                "start_date": start_date,
+                "end_date": end_date,
+                "data": [],
+                "totals": {"error": "Budget service not configured"},
+            }
+
+        result = self._budget_service.get_budget_vs_actual(
+            entity_id=entity_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        if result["budget"] is None:
+            return {
+                "report_name": "Budget Report",
+                "entity_id": entity_id,
+                "start_date": start_date,
+                "end_date": end_date,
+                "data": [],
+                "totals": {"message": "No active budget found for period"},
+            }
+
+        budget = result["budget"]
+        variances = result["variances"]
+
+        variance_data = []
+        total_budgeted = Decimal("0")
+        total_actual = Decimal("0")
+
+        for v in variances:
+            total_budgeted += v.budgeted.amount
+            total_actual += v.actual.amount
+            variance_data.append(
+                {
+                    "category": v.category,
+                    "budgeted": str(v.budgeted.amount),
+                    "actual": str(v.actual.amount),
+                    "variance": str(v.variance.amount),
+                    "variance_percent": str(v.variance_percent),
+                    "is_over_budget": v.is_over_budget,
+                }
+            )
+
+        total_variance = total_budgeted - total_actual
+        total_variance_pct = (
+            (total_variance / total_budgeted * 100).quantize(Decimal("0.01"))
+            if total_budgeted > 0
+            else Decimal("0")
+        )
+
+        return {
+            "report_name": "Budget Report",
+            "budget_id": budget.id,
+            "budget_name": budget.name,
+            "entity_id": entity_id,
+            "period_type": budget.period_type.value,
+            "start_date": start_date,
+            "end_date": end_date,
+            "data": variance_data,
+            "totals": {
+                "total_budgeted": str(total_budgeted),
+                "total_actual": str(total_actual),
+                "total_variance": str(total_variance),
+                "total_variance_percent": str(total_variance_pct),
+                "categories_over_budget": sum(1 for v in variances if v.is_over_budget),
+                "categories_under_budget": sum(
+                    1 for v in variances if not v.is_over_budget
+                ),
+            },
+        }
 
     def _export_to_json(self, report_data: dict[str, Any], output_path: str) -> None:
         """Export report data to JSON file."""

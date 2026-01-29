@@ -12,6 +12,7 @@ from uuid import UUID
 import psycopg2
 import psycopg2.extras
 
+from family_office_ledger.domain.budgets import Budget, BudgetLineItem, BudgetPeriodType
 from family_office_ledger.domain.entities import Account, Entity, Position, Security
 from family_office_ledger.domain.exchange_rates import ExchangeRate, ExchangeRateSource
 from family_office_ledger.domain.reconciliation import (
@@ -33,6 +34,7 @@ from family_office_ledger.domain.value_objects import (
 from family_office_ledger.domain.vendors import Vendor
 from family_office_ledger.repositories.interfaces import (
     AccountRepository,
+    BudgetRepository,
     EntityRepository,
     ExchangeRateRepository,
     PositionRepository,
@@ -226,6 +228,32 @@ class PostgresDatabase:
                     updated_at TEXT NOT NULL
                 );
 
+                -- Budgets table
+                CREATE TABLE IF NOT EXISTS budgets (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    period_type TEXT NOT NULL,
+                    start_date TEXT NOT NULL,
+                    end_date TEXT NOT NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (entity_id) REFERENCES entities(id)
+                );
+
+                -- Budget line items table
+                CREATE TABLE IF NOT EXISTS budget_line_items (
+                    id TEXT PRIMARY KEY,
+                    budget_id TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    budgeted_amount TEXT NOT NULL,
+                    budgeted_currency TEXT NOT NULL,
+                    account_id TEXT,
+                    notes TEXT DEFAULT '',
+                    FOREIGN KEY (budget_id) REFERENCES budgets(id) ON DELETE CASCADE
+                );
+
                 -- Indexes for common queries
                 CREATE INDEX IF NOT EXISTS idx_accounts_entity_id ON accounts(entity_id);
                 CREATE INDEX IF NOT EXISTS idx_positions_account_id ON positions(account_id);
@@ -242,6 +270,9 @@ class PostgresDatabase:
                 CREATE INDEX IF NOT EXISTS idx_vendors_name ON vendors(name);
                 CREATE INDEX IF NOT EXISTS idx_vendors_category ON vendors(category);
                 CREATE INDEX IF NOT EXISTS idx_vendors_tax_id ON vendors(tax_id);
+                CREATE INDEX IF NOT EXISTS idx_budgets_entity ON budgets(entity_id);
+                CREATE INDEX IF NOT EXISTS idx_budgets_dates ON budgets(start_date, end_date);
+                CREATE INDEX IF NOT EXISTS idx_budget_line_items_budget ON budget_line_items(budget_id);
                 """
             )
 
@@ -1648,3 +1679,207 @@ class PostgresVendorRepository(VendorRepository):
             vendor, "updated_at", datetime.fromisoformat(row["updated_at"])
         )
         return vendor
+
+
+class PostgresBudgetRepository(BudgetRepository):
+    """PostgreSQL implementation of BudgetRepository."""
+
+    def __init__(self, database: PostgresDatabase) -> None:
+        self._db = database
+
+    def add(self, budget: Budget) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO budgets (id, name, entity_id, period_type, start_date, end_date,
+                                     is_active, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(budget.id),
+                    budget.name,
+                    str(budget.entity_id),
+                    budget.period_type.value,
+                    budget.start_date.isoformat(),
+                    budget.end_date.isoformat(),
+                    budget.is_active,
+                    budget.created_at.isoformat(),
+                    budget.updated_at.isoformat(),
+                ),
+            )
+        conn.commit()
+
+    def get(self, budget_id: UUID) -> Budget | None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM budgets WHERE id = %s", (str(budget_id),))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_budget(row)
+
+    def update(self, budget: Budget) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE budgets SET
+                    name = %s,
+                    entity_id = %s,
+                    period_type = %s,
+                    start_date = %s,
+                    end_date = %s,
+                    is_active = %s,
+                    updated_at = %s
+                WHERE id = %s
+                """,
+                (
+                    budget.name,
+                    str(budget.entity_id),
+                    budget.period_type.value,
+                    budget.start_date.isoformat(),
+                    budget.end_date.isoformat(),
+                    budget.is_active,
+                    budget.updated_at.isoformat(),
+                    str(budget.id),
+                ),
+            )
+        conn.commit()
+
+    def delete(self, budget_id: UUID) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            # Line items deleted via CASCADE
+            cur.execute("DELETE FROM budgets WHERE id = %s", (str(budget_id),))
+        conn.commit()
+
+    def list_by_entity(
+        self, entity_id: UUID, include_inactive: bool = False
+    ) -> Iterable[Budget]:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            if include_inactive:
+                cur.execute(
+                    "SELECT * FROM budgets WHERE entity_id = %s", (str(entity_id),)
+                )
+            else:
+                cur.execute(
+                    "SELECT * FROM budgets WHERE entity_id = %s AND is_active = TRUE",
+                    (str(entity_id),),
+                )
+            rows = cur.fetchall()
+        return [self._row_to_budget(row) for row in rows]
+
+    def get_active_for_date(self, entity_id: UUID, as_of_date: date) -> Budget | None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM budgets
+                WHERE entity_id = %s AND is_active = TRUE
+                  AND start_date <= %s AND end_date >= %s
+                ORDER BY start_date DESC
+                LIMIT 1
+                """,
+                (str(entity_id), as_of_date.isoformat(), as_of_date.isoformat()),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_budget(row)
+
+    def add_line_item(self, line_item: BudgetLineItem) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO budget_line_items (id, budget_id, category, budgeted_amount,
+                                               budgeted_currency, account_id, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(line_item.id),
+                    str(line_item.budget_id),
+                    line_item.category,
+                    str(line_item.budgeted_amount.amount),
+                    line_item.budgeted_amount.currency,
+                    str(line_item.account_id) if line_item.account_id else None,
+                    line_item.notes,
+                ),
+            )
+        conn.commit()
+
+    def get_line_items(self, budget_id: UUID) -> Iterable[BudgetLineItem]:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM budget_line_items WHERE budget_id = %s",
+                (str(budget_id),),
+            )
+            rows = cur.fetchall()
+        return [self._row_to_line_item(row) for row in rows]
+
+    def update_line_item(self, line_item: BudgetLineItem) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE budget_line_items SET
+                    budget_id = %s,
+                    category = %s,
+                    budgeted_amount = %s,
+                    budgeted_currency = %s,
+                    account_id = %s,
+                    notes = %s
+                WHERE id = %s
+                """,
+                (
+                    str(line_item.budget_id),
+                    line_item.category,
+                    str(line_item.budgeted_amount.amount),
+                    line_item.budgeted_amount.currency,
+                    str(line_item.account_id) if line_item.account_id else None,
+                    line_item.notes,
+                    str(line_item.id),
+                ),
+            )
+        conn.commit()
+
+    def delete_line_item(self, line_item_id: UUID) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM budget_line_items WHERE id = %s", (str(line_item_id),)
+            )
+        conn.commit()
+
+    def _row_to_budget(self, row: Any) -> Budget:
+        budget = Budget(
+            name=row["name"],
+            entity_id=UUID(row["entity_id"]),
+            period_type=BudgetPeriodType(row["period_type"]),
+            start_date=date.fromisoformat(row["start_date"]),
+            end_date=date.fromisoformat(row["end_date"]),
+            id=UUID(row["id"]),
+            is_active=bool(row["is_active"]),
+        )
+        object.__setattr__(
+            budget, "created_at", datetime.fromisoformat(row["created_at"])
+        )
+        object.__setattr__(
+            budget, "updated_at", datetime.fromisoformat(row["updated_at"])
+        )
+        return budget
+
+    def _row_to_line_item(self, row: Any) -> BudgetLineItem:
+        return BudgetLineItem(
+            budget_id=UUID(row["budget_id"]),
+            category=row["category"],
+            budgeted_amount=Money(
+                Decimal(row["budgeted_amount"]), row["budgeted_currency"]
+            ),
+            id=UUID(row["id"]),
+            account_id=UUID(row["account_id"]) if row["account_id"] else None,
+            notes=row["notes"] or "",
+        )

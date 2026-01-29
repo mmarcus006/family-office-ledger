@@ -623,3 +623,101 @@ class RecurringExpenseListResponse(BaseModel):
 
     recurring_expenses: list[RecurringExpenseResponse]
     total: int
+
+
+# Budget Schemas
+class BudgetCreate(BaseModel):
+    """Schema for creating a budget."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(..., min_length=1)
+    entity_id: UUID
+    period_type: str = Field(..., pattern=r"^(monthly|quarterly|annual|custom)$")
+    start_date: date
+    end_date: date
+
+
+class BudgetLineItemCreate(BaseModel):
+    """Schema for creating a budget line item."""
+
+    category: str = Field(..., min_length=1)
+    budgeted_amount: str  # Decimal as string
+    budgeted_currency: str = Field(default="USD", min_length=3, max_length=3)
+    account_id: UUID | None = None
+    notes: str = ""
+
+
+class BudgetLineItemResponse(BaseModel):
+    """Schema for budget line item response."""
+
+    id: UUID
+    budget_id: UUID
+    category: str
+    budgeted_amount: str
+    budgeted_currency: str
+    account_id: UUID | None
+    notes: str
+
+
+class BudgetResponse(BaseModel):
+    """Schema for budget response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    entity_id: UUID
+    period_type: str
+    start_date: date
+    end_date: date
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class BudgetListResponse(BaseModel):
+    """Schema for paginated budget list response."""
+
+    budgets: list[BudgetResponse]
+    total: int
+
+
+class BudgetVarianceResponse(BaseModel):
+    """Schema for budget variance response."""
+
+    category: str
+    budgeted: str
+    actual: str
+    variance: str
+    variance_percent: str
+    is_over_budget: bool
+
+
+class BudgetVsActualResponse(BaseModel):
+    """Schema for budget vs actual response."""
+
+    budget: BudgetResponse | None
+    line_items: list[BudgetLineItemResponse]
+    variances: list[BudgetVarianceResponse]
+    start_date: date
+    end_date: date
+
+
+class BudgetAlertResponse(BaseModel):
+    """Schema for budget alert response."""
+
+    category: str
+    threshold: int
+    percent_used: float
+    budgeted: str
+    actual: str
+    status: str  # "warning" or "over_budget"
+
+
+class BudgetAlertsResponse(BaseModel):
+    """Schema for budget alerts list response."""
+
+    budget_id: UUID
+    alerts: list[BudgetAlertResponse]
+    total_alerts: int

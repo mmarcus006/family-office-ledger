@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from family_office_ledger.api.routes import (
     account_router,
     audit_router,
+    budget_router,
     currency_router,
     entity_router,
     expense_router,
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
     app.include_router(currency_router)
     app.include_router(expense_router)
     app.include_router(vendor_router)
+    app.include_router(budget_router)
 
     return app
 

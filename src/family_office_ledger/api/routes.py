@@ -16,6 +16,14 @@ from family_office_ledger.api.schemas import (
     AuditListResponse,
     AuditSummaryResponse,
     BalanceSheetResponse,
+    BudgetAlertResponse,
+    BudgetAlertsResponse,
+    BudgetCreate,
+    BudgetLineItemCreate,
+    BudgetLineItemResponse,
+    BudgetListResponse,
+    BudgetResponse,
+    BudgetVarianceResponse,
     CategorizeTransactionRequest,
     ConcentrationReportResponse,
     CreateSessionRequest,
@@ -66,6 +74,7 @@ from family_office_ledger.api.schemas import (
     VendorUpdate,
 )
 from family_office_ledger.domain.audit import AuditAction, AuditEntityType
+from family_office_ledger.domain.budgets import Budget, BudgetLineItem
 from family_office_ledger.domain.entities import Account, Entity
 from family_office_ledger.domain.exchange_rates import ExchangeRate, ExchangeRateSource
 from family_office_ledger.domain.reconciliation import (
@@ -86,6 +95,7 @@ from family_office_ledger.domain.value_objects import (
     EntityType,
     Money,
 )
+from family_office_ledger.domain.vendors import Vendor
 from family_office_ledger.repositories.interfaces import (
     AccountRepository,
     EntityRepository,
@@ -93,6 +103,7 @@ from family_office_ledger.repositories.interfaces import (
 )
 from family_office_ledger.repositories.sqlite import (
     SQLiteAccountRepository,
+    SQLiteBudgetRepository,
     SQLiteDatabase,
     SQLiteEntityRepository,
     SQLiteExchangeRateRepository,
@@ -103,8 +114,8 @@ from family_office_ledger.repositories.sqlite import (
     SQLiteTransactionRepository,
     SQLiteVendorRepository,
 )
-from family_office_ledger.domain.vendors import Vendor
 from family_office_ledger.services.audit import AuditService
+from family_office_ledger.services.budget import BudgetServiceImpl
 from family_office_ledger.services.currency import (
     CurrencyServiceImpl,
     ExchangeRateNotFoundError,
@@ -149,6 +160,7 @@ audit_router = APIRouter(prefix="/audit", tags=["audit"])
 currency_router = APIRouter(prefix="/currency", tags=["currency"])
 expense_router = APIRouter(prefix="/expenses", tags=["expenses"])
 vendor_router = APIRouter(prefix="/vendors", tags=["vendors"])
+budget_router = APIRouter(prefix="/budgets", tags=["budgets"])
 
 
 # Dependency injection functions
@@ -182,13 +194,19 @@ def get_ledger_service(
 
 
 def get_reporting_service(db: SQLiteDatabase) -> ReportingService:
-    """Get reporting service instance."""
     entity_repo = SQLiteEntityRepository(db)
     account_repo = SQLiteAccountRepository(db)
     transaction_repo = SQLiteTransactionRepository(db)
     position_repo = SQLitePositionRepository(db)
     tax_lot_repo = SQLiteTaxLotRepository(db)
     security_repo = SQLiteSecurityRepository(db)
+    budget_repo = SQLiteBudgetRepository(db)
+    vendor_repo = SQLiteVendorRepository(db)
+
+    from family_office_ledger.services.budget import BudgetServiceImpl
+
+    expense_service = ExpenseServiceImpl(transaction_repo, account_repo, vendor_repo)
+    budget_service = BudgetServiceImpl(budget_repo, expense_service)
 
     return ReportingServiceImpl(
         entity_repo=entity_repo,
@@ -197,6 +215,7 @@ def get_reporting_service(db: SQLiteDatabase) -> ReportingService:
         position_repo=position_repo,
         tax_lot_repo=tax_lot_repo,
         security_repo=security_repo,
+        budget_service=budget_service,
     )
 
 
@@ -595,6 +614,29 @@ def dashboard_summary(
         as_of_date=report_data["as_of_date"],
         data=_serialize_dashboard_data(report_data["data"]),
         totals={},
+    )
+
+
+@report_router.get("/budget/{entity_id}", response_model=ReportResponse)
+def budget_report(
+    entity_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+) -> ReportResponse:
+    reporting_service = get_reporting_service(db)
+
+    report_data = reporting_service.budget_report(
+        entity_id=entity_id,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    return ReportResponse(
+        report_name=report_data["report_name"],
+        as_of_date=start_date,
+        data=report_data["data"],
+        totals=report_data["totals"],
     )
 
 
@@ -2193,4 +2235,255 @@ def get_recurring_expenses(
             for r in recurring
         ],
         total=len(recurring),
+    )
+
+
+# Budget endpoints
+def get_budget_service(db: SQLiteDatabase) -> BudgetServiceImpl:
+    """Get budget service instance."""
+    budget_repo = SQLiteBudgetRepository(db)
+    expense_service = get_expense_service(db)
+    return BudgetServiceImpl(budget_repo, expense_service)
+
+
+def _budget_to_response(budget: Budget) -> BudgetResponse:
+    """Convert Budget domain object to response schema."""
+    return BudgetResponse(
+        id=budget.id,
+        name=budget.name,
+        entity_id=budget.entity_id,
+        period_type=budget.period_type.value,
+        start_date=budget.start_date,
+        end_date=budget.end_date,
+        is_active=budget.is_active,
+        created_at=budget.created_at,
+        updated_at=budget.updated_at,
+    )
+
+
+def _line_item_to_response(item: BudgetLineItem) -> BudgetLineItemResponse:
+    """Convert BudgetLineItem domain object to response schema."""
+    return BudgetLineItemResponse(
+        id=item.id,
+        budget_id=item.budget_id,
+        category=item.category,
+        budgeted_amount=str(item.budgeted_amount.amount),
+        budgeted_currency=item.budgeted_amount.currency,
+        account_id=item.account_id,
+        notes=item.notes,
+    )
+
+
+@budget_router.post(
+    "",
+    response_model=BudgetResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_budget(
+    payload: BudgetCreate,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> BudgetResponse:
+    """Create a new budget."""
+    entity_repo = get_entity_repository(db)
+
+    entity = entity_repo.get(payload.entity_id)
+    if entity is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Entity {payload.entity_id} not found",
+        )
+
+    budget_service = get_budget_service(db)
+    budget = budget_service.create_budget(
+        name=payload.name,
+        entity_id=payload.entity_id,
+        period_type=payload.period_type,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+    )
+
+    return _budget_to_response(budget)
+
+
+@budget_router.get("", response_model=BudgetListResponse)
+def list_budgets(
+    db: Annotated[SQLiteDatabase, Depends()],
+    entity_id: UUID = Query(...),
+) -> BudgetListResponse:
+    """List budgets for an entity."""
+    budget_service = get_budget_service(db)
+    budgets = list(budget_service._budget_repo.list_by_entity(entity_id))
+    return BudgetListResponse(
+        budgets=[_budget_to_response(b) for b in budgets],
+        total=len(budgets),
+    )
+
+
+@budget_router.get("/{budget_id}", response_model=BudgetResponse)
+def get_budget(
+    budget_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> BudgetResponse:
+    """Get budget by ID."""
+    budget_service = get_budget_service(db)
+    budget = budget_service.get_budget(budget_id)
+    if budget is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Budget {budget_id} not found",
+        )
+    return _budget_to_response(budget)
+
+
+@budget_router.delete("/{budget_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_budget(
+    budget_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> None:
+    """Delete a budget."""
+    budget_service = get_budget_service(db)
+    budget = budget_service.get_budget(budget_id)
+    if budget is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Budget {budget_id} not found",
+        )
+    budget_service.delete_budget(budget_id)
+
+
+@budget_router.post(
+    "/{budget_id}/line-items",
+    response_model=BudgetLineItemResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_line_item(
+    budget_id: UUID,
+    payload: BudgetLineItemCreate,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> BudgetLineItemResponse:
+    """Add a line item to a budget."""
+    budget_service = get_budget_service(db)
+    budget = budget_service.get_budget(budget_id)
+    if budget is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Budget {budget_id} not found",
+        )
+
+    line_item = budget_service.add_line_item(
+        budget_id=budget_id,
+        category=payload.category,
+        budgeted_amount=Money(
+            Decimal(payload.budgeted_amount), payload.budgeted_currency
+        ),
+        account_id=payload.account_id,
+        notes=payload.notes,
+    )
+
+    return _line_item_to_response(line_item)
+
+
+@budget_router.get(
+    "/{budget_id}/line-items", response_model=list[BudgetLineItemResponse]
+)
+def list_line_items(
+    budget_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> list[BudgetLineItemResponse]:
+    """List line items for a budget."""
+    budget_service = get_budget_service(db)
+    budget = budget_service.get_budget(budget_id)
+    if budget is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Budget {budget_id} not found",
+        )
+
+    line_items = budget_service.get_line_items(budget_id)
+    return [_line_item_to_response(item) for item in line_items]
+
+
+@budget_router.get("/{budget_id}/variance", response_model=list[BudgetVarianceResponse])
+def get_budget_variance(
+    budget_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+) -> list[BudgetVarianceResponse]:
+    """Get budget variance for a date range."""
+    budget_service = get_budget_service(db)
+    budget = budget_service.get_budget(budget_id)
+    if budget is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Budget {budget_id} not found",
+        )
+
+    actual_expenses = budget_service._expense_service.get_expenses_by_category(
+        entity_ids=[budget.entity_id],
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    variances = budget_service.calculate_variance(budget_id, actual_expenses)
+
+    return [
+        BudgetVarianceResponse(
+            category=v.category,
+            budgeted=str(v.budgeted.amount),
+            actual=str(v.actual.amount),
+            variance=str(v.variance.amount),
+            variance_percent=str(v.variance_percent),
+            is_over_budget=v.is_over_budget,
+        )
+        for v in variances
+    ]
+
+
+@budget_router.get("/{budget_id}/alerts", response_model=BudgetAlertsResponse)
+def get_budget_alerts(
+    budget_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    threshold: int = Query(default=80),
+) -> BudgetAlertsResponse:
+    """Get budget alerts for categories exceeding threshold."""
+    budget_service = get_budget_service(db)
+    budget = budget_service.get_budget(budget_id)
+    if budget is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Budget {budget_id} not found",
+        )
+
+    actual_expenses = budget_service._expense_service.get_expenses_by_category(
+        entity_ids=[budget.entity_id],
+        start_date=budget.start_date,
+        end_date=budget.end_date,
+    )
+
+    variances = budget_service.calculate_variance(budget_id, actual_expenses)
+
+    alerts: list[BudgetAlertResponse] = []
+    for v in variances:
+        if v.budgeted.amount > 0:
+            percent_used = (v.actual.amount / v.budgeted.amount * 100).quantize(
+                Decimal("0.01")
+            )
+            if percent_used >= threshold:
+                status_str = "over_budget" if v.is_over_budget else "warning"
+                alerts.append(
+                    BudgetAlertResponse(
+                        category=v.category,
+                        threshold=threshold,
+                        percent_used=float(percent_used),
+                        budgeted=str(v.budgeted.amount),
+                        actual=str(v.actual.amount),
+                        status=status_str,
+                    )
+                )
+
+    return BudgetAlertsResponse(
+        budget_id=budget_id,
+        alerts=alerts,
+        total_alerts=len(alerts),
     )
