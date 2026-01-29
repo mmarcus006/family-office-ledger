@@ -1,17 +1,25 @@
 """Reconciliation service for matching imported transactions with ledger."""
 
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from difflib import SequenceMatcher
 from typing import Any
 from uuid import UUID
 
+from family_office_ledger.domain.reconciliation import (
+    ReconciliationMatch,
+    ReconciliationMatchStatus,
+    ReconciliationSession,
+    ReconciliationSessionStatus,
+)
 from family_office_ledger.domain.transactions import Entry, Transaction
 from family_office_ledger.domain.value_objects import Money
 from family_office_ledger.parsers.csv_parser import CSVParser
 from family_office_ledger.parsers.ofx_parser import OFXParser
 from family_office_ledger.repositories.interfaces import (
     AccountRepository,
+    ReconciliationSessionRepository,
     TransactionRepository,
 )
 from family_office_ledger.services.interfaces import (
@@ -19,6 +27,30 @@ from family_office_ledger.services.interfaces import (
     ReconciliationService,
     ReconciliationSummary,
 )
+
+
+class SessionExistsError(Exception):
+    """Raised when trying to create a session when one already exists."""
+
+
+class SessionNotFoundError(Exception):
+    """Raised when a session is not found."""
+
+
+class MatchNotFoundError(Exception):
+    """Raised when a match is not found."""
+
+
+@dataclass
+class SessionSummary:
+    """Summary statistics for a reconciliation session."""
+
+    total_imported: int
+    pending: int
+    confirmed: int
+    rejected: int
+    skipped: int
+    match_rate: float
 
 
 class ReconciliationServiceImpl(ReconciliationService):
@@ -45,15 +77,18 @@ class ReconciliationServiceImpl(ReconciliationService):
         self,
         transaction_repo: TransactionRepository,
         account_repo: AccountRepository,
+        session_repo: ReconciliationSessionRepository | None = None,
     ) -> None:
         """Initialize ReconciliationService.
 
         Args:
             transaction_repo: Repository for transaction persistence.
             account_repo: Repository for account lookup.
+            session_repo: Repository for reconciliation sessions (optional for backward compat).
         """
         self._transaction_repo = transaction_repo
         self._account_repo = account_repo
+        self._session_repo = session_repo
         self._csv_parser = CSVParser()
         self._ofx_parser = OFXParser()
 
@@ -463,3 +498,298 @@ class ReconciliationServiceImpl(ReconciliationService):
             if part.startswith(self.IMPORT_REF_PREFIX):
                 import_ids.append(part[len(self.IMPORT_REF_PREFIX) :])
         return import_ids
+
+    def create_session(
+        self,
+        account_id: UUID,
+        file_path: str,
+        file_format: str,
+    ) -> ReconciliationSession:
+        """Create a new reconciliation session for an account.
+
+        Imports transactions from file and creates matches against ledger.
+
+        Args:
+            account_id: Account to reconcile.
+            file_path: Path to import file.
+            file_format: File format (csv, ofx, qfx).
+
+        Returns:
+            Created session with matches.
+
+        Raises:
+            SessionExistsError: If pending session exists for account.
+        """
+        if self._session_repo is None:
+            raise RuntimeError("Session repository not configured")
+
+        existing = self._session_repo.get_pending_for_account(account_id)
+        if existing is not None:
+            raise SessionExistsError(
+                f"Pending session already exists for account {account_id}"
+            )
+
+        imported = self.import_transactions(file_path, account_id, file_format)
+        match_results = self.match_imported(imported, account_id)
+
+        session = ReconciliationSession(
+            account_id=account_id,
+            file_name=file_path.split("/")[-1],
+            file_format=file_format,
+        )
+
+        for imp, result in zip(imported, match_results, strict=True):
+            imported_date = imp.get("date")
+            imported_amount = imp.get("amount")
+
+            if imported_date is None or imported_amount is None:
+                continue
+
+            match = ReconciliationMatch(
+                session_id=session.id,
+                imported_id=str(imp.get("import_id", "")),
+                imported_date=imported_date,
+                imported_amount=imported_amount,
+                imported_description=str(
+                    imp.get("description") or imp.get("memo") or ""
+                ),
+                suggested_ledger_txn_id=result.ledger_transaction_id
+                if result.matched
+                else None,
+                confidence_score=result.confidence_score,
+            )
+            session.matches.append(match)
+
+        self._session_repo.add(session)
+        return session
+
+    def get_session(self, session_id: UUID) -> ReconciliationSession | None:
+        """Get a reconciliation session by ID.
+
+        Args:
+            session_id: Session ID.
+
+        Returns:
+            Session or None if not found.
+        """
+        if self._session_repo is None:
+            raise RuntimeError("Session repository not configured")
+        return self._session_repo.get(session_id)
+
+    def list_matches(
+        self,
+        session_id: UUID,
+        status: ReconciliationMatchStatus | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[ReconciliationMatch], int]:
+        """List matches for a session with optional filtering and pagination.
+
+        Args:
+            session_id: Session ID.
+            status: Optional status filter.
+            limit: Max matches to return.
+            offset: Offset for pagination.
+
+        Returns:
+            Tuple of (matches, total_count).
+
+        Raises:
+            SessionNotFoundError: If session not found.
+        """
+        if self._session_repo is None:
+            raise RuntimeError("Session repository not configured")
+
+        session = self._session_repo.get(session_id)
+        if session is None:
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+
+        matches = session.matches
+        if status is not None:
+            matches = [m for m in matches if m.status == status]
+
+        total = len(matches)
+        paginated = matches[offset : offset + limit]
+
+        return paginated, total
+
+    def confirm_session_match(
+        self, session_id: UUID, match_id: UUID
+    ) -> ReconciliationMatch:
+        """Confirm a match in a session.
+
+        Args:
+            session_id: Session ID.
+            match_id: Match ID.
+
+        Returns:
+            Updated match.
+
+        Raises:
+            SessionNotFoundError: If session not found.
+            MatchNotFoundError: If match not found or has no suggested transaction.
+        """
+        if self._session_repo is None:
+            raise RuntimeError("Session repository not configured")
+
+        session = self._session_repo.get(session_id)
+        if session is None:
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+
+        match = next((m for m in session.matches if m.id == match_id), None)
+        if match is None:
+            raise MatchNotFoundError(f"Match not found: {match_id}")
+
+        if match.suggested_ledger_txn_id is None:
+            raise MatchNotFoundError("Cannot confirm: no suggested ledger transaction")
+
+        match.status = ReconciliationMatchStatus.CONFIRMED
+        match.actioned_at = datetime.now(UTC)
+
+        self.confirm_match(match.imported_id, match.suggested_ledger_txn_id)
+
+        self._session_repo.update(session)
+        self._check_auto_close(session)
+
+        return match
+
+    def reject_session_match(
+        self, session_id: UUID, match_id: UUID
+    ) -> ReconciliationMatch:
+        """Reject a match in a session.
+
+        Args:
+            session_id: Session ID.
+            match_id: Match ID.
+
+        Returns:
+            Updated match.
+
+        Raises:
+            SessionNotFoundError: If session not found.
+            MatchNotFoundError: If match not found.
+        """
+        if self._session_repo is None:
+            raise RuntimeError("Session repository not configured")
+
+        session = self._session_repo.get(session_id)
+        if session is None:
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+
+        match = next((m for m in session.matches if m.id == match_id), None)
+        if match is None:
+            raise MatchNotFoundError(f"Match not found: {match_id}")
+
+        match.status = ReconciliationMatchStatus.REJECTED
+        match.actioned_at = datetime.now(UTC)
+
+        self._session_repo.update(session)
+        self._check_auto_close(session)
+
+        return match
+
+    def skip_session_match(
+        self, session_id: UUID, match_id: UUID
+    ) -> ReconciliationMatch:
+        """Skip a match in a session.
+
+        Args:
+            session_id: Session ID.
+            match_id: Match ID.
+
+        Returns:
+            Updated match.
+
+        Raises:
+            SessionNotFoundError: If session not found.
+            MatchNotFoundError: If match not found.
+        """
+        if self._session_repo is None:
+            raise RuntimeError("Session repository not configured")
+
+        session = self._session_repo.get(session_id)
+        if session is None:
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+
+        match = next((m for m in session.matches if m.id == match_id), None)
+        if match is None:
+            raise MatchNotFoundError(f"Match not found: {match_id}")
+
+        match.status = ReconciliationMatchStatus.SKIPPED
+        match.actioned_at = datetime.now(UTC)
+
+        self._session_repo.update(session)
+
+        return match
+
+    def close_session(self, session_id: UUID) -> ReconciliationSession:
+        """Manually close a session.
+
+        Sets status to COMPLETED if all matches are resolved (no pending/skipped),
+        otherwise sets to ABANDONED.
+
+        Args:
+            session_id: Session ID.
+
+        Returns:
+            Updated session.
+
+        Raises:
+            SessionNotFoundError: If session not found.
+        """
+        if self._session_repo is None:
+            raise RuntimeError("Session repository not configured")
+
+        session = self._session_repo.get(session_id)
+        if session is None:
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+
+        session.closed_at = datetime.now(UTC)
+
+        if session.pending_count == 0 and session.skipped_count == 0:
+            session.status = ReconciliationSessionStatus.COMPLETED
+        else:
+            session.status = ReconciliationSessionStatus.ABANDONED
+
+        self._session_repo.update(session)
+        return session
+
+    def get_session_summary(self, session_id: UUID) -> SessionSummary:
+        """Get summary statistics for a session.
+
+        Args:
+            session_id: Session ID.
+
+        Returns:
+            Summary with counts for each status.
+
+        Raises:
+            SessionNotFoundError: If session not found.
+        """
+        if self._session_repo is None:
+            raise RuntimeError("Session repository not configured")
+
+        session = self._session_repo.get(session_id)
+        if session is None:
+            raise SessionNotFoundError(f"Session not found: {session_id}")
+
+        total = len(session.matches)
+        return SessionSummary(
+            total_imported=total,
+            pending=session.pending_count,
+            confirmed=session.confirmed_count,
+            rejected=session.rejected_count,
+            skipped=session.skipped_count,
+            match_rate=session.match_rate,
+        )
+
+    def _check_auto_close(self, session: ReconciliationSession) -> None:
+        """Check if session should auto-close.
+
+        Auto-closes when pending_count == 0 AND skipped_count == 0.
+        """
+        if session.pending_count == 0 and session.skipped_count == 0:
+            session.status = ReconciliationSessionStatus.COMPLETED
+            session.closed_at = datetime.now(UTC)
+            if self._session_repo is not None:
+                self._session_repo.update(session)

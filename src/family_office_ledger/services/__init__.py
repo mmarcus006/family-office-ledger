@@ -19,7 +19,13 @@ from family_office_ledger.services.lot_matching import (
     InvalidLotSelectionError,
     LotMatchingServiceImpl,
 )
-from family_office_ledger.services.reconciliation import ReconciliationServiceImpl
+from family_office_ledger.services.reconciliation import (
+    MatchNotFoundError,
+    ReconciliationServiceImpl,
+    SessionExistsError,
+    SessionNotFoundError,
+    SessionSummary,
+)
 from family_office_ledger.services.reporting import ReportingServiceImpl
 from family_office_ledger.services.transaction_classifier import (
     SecurityLookup,
@@ -36,6 +42,7 @@ __all__ = [
     "LedgerServiceImpl",
     "LotMatchingService",
     "LotMatchingServiceImpl",
+    "MatchNotFoundError",
     "MatchResult",
     "ReconciliationService",
     "ReconciliationServiceImpl",
@@ -43,6 +50,9 @@ __all__ = [
     "ReportingService",
     "ReportingServiceImpl",
     "SecurityLookup",
+    "SessionExistsError",
+    "SessionNotFoundError",
+    "SessionSummary",
     "TransactionClassifier",
     "TransactionNotFoundError",
     "UnbalancedTransactionError",

@@ -145,3 +145,61 @@ class HealthResponse(BaseModel):
 
     status: str
     version: str = "0.1.0"
+
+
+# Reconciliation Schemas
+class CreateSessionRequest(BaseModel):
+    """Schema for creating a reconciliation session."""
+
+    account_id: UUID
+    file_path: str
+    file_format: str
+
+
+class MatchResponse(BaseModel):
+    """Schema for reconciliation match response."""
+
+    id: UUID
+    session_id: UUID
+    imported_id: str
+    imported_date: date
+    imported_amount: str
+    imported_description: str
+    suggested_ledger_txn_id: UUID | None
+    confidence_score: int
+    status: str
+    actioned_at: datetime | None
+    created_at: datetime
+
+
+class SessionResponse(BaseModel):
+    """Schema for reconciliation session response."""
+
+    id: UUID
+    account_id: UUID
+    file_name: str
+    file_format: str
+    status: str
+    created_at: datetime
+    closed_at: datetime | None
+    matches: list[MatchResponse]
+
+
+class MatchListResponse(BaseModel):
+    """Schema for paginated match list response."""
+
+    matches: list[MatchResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class SessionSummaryResponse(BaseModel):
+    """Schema for session summary response."""
+
+    total_imported: int
+    pending: int
+    confirmed: int
+    rejected: int
+    skipped: int
+    match_rate: float

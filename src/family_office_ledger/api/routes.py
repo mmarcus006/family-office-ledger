@@ -11,15 +11,25 @@ from family_office_ledger.api.schemas import (
     AccountCreate,
     AccountResponse,
     BalanceSheetResponse,
+    CreateSessionRequest,
     EntityCreate,
     EntityResponse,
     EntryResponse,
     HealthResponse,
+    MatchListResponse,
+    MatchResponse,
     ReportResponse,
+    SessionResponse,
+    SessionSummaryResponse,
     TransactionCreate,
     TransactionResponse,
 )
 from family_office_ledger.domain.entities import Account, Entity
+from family_office_ledger.domain.reconciliation import (
+    ReconciliationMatch,
+    ReconciliationMatchStatus,
+    ReconciliationSession,
+)
 from family_office_ledger.domain.transactions import Entry, Transaction
 from family_office_ledger.domain.value_objects import (
     AccountSubType,
@@ -30,6 +40,7 @@ from family_office_ledger.domain.value_objects import (
 from family_office_ledger.repositories.interfaces import (
     AccountRepository,
     EntityRepository,
+    ReconciliationSessionRepository,
     TransactionRepository,
 )
 from family_office_ledger.repositories.sqlite import (
@@ -37,6 +48,7 @@ from family_office_ledger.repositories.sqlite import (
     SQLiteDatabase,
     SQLiteEntityRepository,
     SQLitePositionRepository,
+    SQLiteReconciliationSessionRepository,
     SQLiteSecurityRepository,
     SQLiteTaxLotRepository,
     SQLiteTransactionRepository,
@@ -46,6 +58,12 @@ from family_office_ledger.services.ledger import (
     LedgerServiceImpl,
     UnbalancedTransactionError,
 )
+from family_office_ledger.services.reconciliation import (
+    MatchNotFoundError,
+    ReconciliationServiceImpl,
+    SessionExistsError,
+    SessionNotFoundError,
+)
 from family_office_ledger.services.reporting import ReportingServiceImpl
 
 # Create routers
@@ -54,6 +72,7 @@ entity_router = APIRouter(prefix="/entities", tags=["entities"])
 account_router = APIRouter(prefix="/accounts", tags=["accounts"])
 transaction_router = APIRouter(prefix="/transactions", tags=["transactions"])
 report_router = APIRouter(prefix="/reports", tags=["reports"])
+reconciliation_router = APIRouter(prefix="/reconciliation", tags=["reconciliation"])
 
 
 # Dependency injection functions
@@ -102,6 +121,19 @@ def get_reporting_service(db: SQLiteDatabase) -> ReportingService:
         position_repo=position_repo,
         tax_lot_repo=tax_lot_repo,
         security_repo=security_repo,
+    )
+
+
+def get_reconciliation_service(db: SQLiteDatabase) -> ReconciliationServiceImpl:
+    """Get reconciliation service instance."""
+    account_repo = SQLiteAccountRepository(db)
+    transaction_repo = SQLiteTransactionRepository(db)
+    session_repo = SQLiteReconciliationSessionRepository(db)
+
+    return ReconciliationServiceImpl(
+        transaction_repo=transaction_repo,
+        account_repo=account_repo,
+        session_repo=session_repo,
     )
 
 
@@ -447,3 +479,267 @@ def _serialize_totals(totals: dict[str, Any]) -> dict[str, Any]:
         else:
             serialized[key] = value
     return serialized
+
+
+def _reconciliation_match_to_response(
+    match: ReconciliationMatch,
+) -> MatchResponse:
+    """Convert ReconciliationMatch domain object to response schema."""
+    return MatchResponse(
+        id=match.id,
+        session_id=match.session_id,
+        imported_id=match.imported_id,
+        imported_date=match.imported_date,
+        imported_amount=str(match.imported_amount),
+        imported_description=match.imported_description,
+        suggested_ledger_txn_id=match.suggested_ledger_txn_id,
+        confidence_score=match.confidence_score,
+        status=match.status.value,
+        actioned_at=match.actioned_at,
+        created_at=match.created_at,
+    )
+
+
+def _reconciliation_session_to_response(
+    session: ReconciliationSession,
+) -> SessionResponse:
+    """Convert ReconciliationSession domain object to response schema."""
+    return SessionResponse(
+        id=session.id,
+        account_id=session.account_id,
+        file_name=session.file_name,
+        file_format=session.file_format,
+        status=session.status.value,
+        created_at=session.created_at,
+        closed_at=session.closed_at,
+        matches=[_reconciliation_match_to_response(m) for m in session.matches],
+    )
+
+
+# Reconciliation endpoints
+@reconciliation_router.post(
+    "/sessions",
+    response_model=SessionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_session(
+    payload: CreateSessionRequest,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> SessionResponse:
+    """Create a new reconciliation session."""
+    reconciliation_service = get_reconciliation_service(db)
+
+    try:
+        session = reconciliation_service.create_session(
+            account_id=payload.account_id,
+            file_path=payload.file_path,
+            file_format=payload.file_format,
+        )
+    except SessionExistsError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        ) from e
+
+    return _reconciliation_session_to_response(session)
+
+
+@reconciliation_router.get(
+    "/sessions/{session_id}",
+    response_model=SessionResponse,
+)
+def get_session(
+    session_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> SessionResponse:
+    """Get a reconciliation session by ID."""
+    reconciliation_service = get_reconciliation_service(db)
+
+    session = reconciliation_service.get_session(session_id)
+
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
+
+    return _reconciliation_session_to_response(session)
+
+
+@reconciliation_router.get(
+    "/sessions/{session_id}/matches",
+    response_model=MatchListResponse,
+)
+def list_matches(
+    session_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    match_status: ReconciliationMatchStatus | None = Query(
+        default=None, alias="status"
+    ),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> MatchListResponse:
+    """List matches for a session with pagination."""
+    reconciliation_service = get_reconciliation_service(db)
+
+    try:
+        matches, total = reconciliation_service.list_matches(
+            session_id=session_id,
+            status=match_status,
+            limit=limit,
+            offset=offset,
+        )
+    except SessionNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return MatchListResponse(
+        matches=[_reconciliation_match_to_response(m) for m in matches],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+    return MatchListResponse(
+        matches=[_reconciliation_match_to_response(m) for m in matches],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@reconciliation_router.post(
+    "/sessions/{session_id}/matches/{match_id}/confirm",
+    response_model=MatchResponse,
+)
+def confirm_match(
+    session_id: UUID,
+    match_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> MatchResponse:
+    """Confirm a match in a session."""
+    reconciliation_service = get_reconciliation_service(db)
+
+    try:
+        match = reconciliation_service.confirm_session_match(session_id, match_id)
+    except SessionNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+    except MatchNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return _reconciliation_match_to_response(match)
+
+
+@reconciliation_router.post(
+    "/sessions/{session_id}/matches/{match_id}/reject",
+    response_model=MatchResponse,
+)
+def reject_match(
+    session_id: UUID,
+    match_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> MatchResponse:
+    """Reject a match in a session."""
+    reconciliation_service = get_reconciliation_service(db)
+
+    try:
+        match = reconciliation_service.reject_session_match(session_id, match_id)
+    except SessionNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+    except MatchNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return _reconciliation_match_to_response(match)
+
+
+@reconciliation_router.post(
+    "/sessions/{session_id}/matches/{match_id}/skip",
+    response_model=MatchResponse,
+)
+def skip_match(
+    session_id: UUID,
+    match_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> MatchResponse:
+    """Skip a match in a session."""
+    reconciliation_service = get_reconciliation_service(db)
+
+    try:
+        match = reconciliation_service.skip_session_match(session_id, match_id)
+    except SessionNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+    except MatchNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return _reconciliation_match_to_response(match)
+
+
+@reconciliation_router.post(
+    "/sessions/{session_id}/close",
+    response_model=SessionResponse,
+)
+def close_session(
+    session_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> SessionResponse:
+    """Manually close a session."""
+    reconciliation_service = get_reconciliation_service(db)
+
+    try:
+        session = reconciliation_service.close_session(session_id)
+    except SessionNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return _reconciliation_session_to_response(session)
+
+
+@reconciliation_router.get(
+    "/sessions/{session_id}/summary",
+    response_model=SessionSummaryResponse,
+)
+def get_session_summary(
+    session_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> SessionSummaryResponse:
+    """Get session summary statistics."""
+    reconciliation_service = get_reconciliation_service(db)
+
+    try:
+        summary = reconciliation_service.get_session_summary(session_id)
+    except SessionNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return SessionSummaryResponse(
+        total_imported=summary.total_imported,
+        pending=summary.pending,
+        confirmed=summary.confirmed,
+        rejected=summary.rejected,
+        skipped=summary.skipped,
+        match_rate=summary.match_rate,
+    )

@@ -12,6 +12,12 @@ import psycopg2
 import psycopg2.extras
 
 from family_office_ledger.domain.entities import Account, Entity, Position, Security
+from family_office_ledger.domain.reconciliation import (
+    ReconciliationMatch,
+    ReconciliationMatchStatus,
+    ReconciliationSession,
+    ReconciliationSessionStatus,
+)
 from family_office_ledger.domain.transactions import Entry, TaxLot, Transaction
 from family_office_ledger.domain.value_objects import (
     AccountSubType,
@@ -26,6 +32,7 @@ from family_office_ledger.repositories.interfaces import (
     AccountRepository,
     EntityRepository,
     PositionRepository,
+    ReconciliationSessionRepository,
     SecurityRepository,
     TaxLotRepository,
     TransactionRepository,
@@ -159,6 +166,33 @@ class PostgresDatabase:
                     FOREIGN KEY (tax_lot_id) REFERENCES tax_lots(id)
                 );
 
+                -- Reconciliation sessions table
+                CREATE TABLE IF NOT EXISTS reconciliation_sessions (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL,
+                    file_name TEXT NOT NULL,
+                    file_format TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TEXT NOT NULL,
+                    closed_at TEXT
+                );
+
+                -- Reconciliation matches table
+                CREATE TABLE IF NOT EXISTS reconciliation_matches (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    imported_id TEXT NOT NULL,
+                    imported_date TEXT NOT NULL,
+                    imported_amount TEXT NOT NULL,
+                    imported_description TEXT NOT NULL DEFAULT '',
+                    suggested_ledger_txn_id TEXT,
+                    confidence_score INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    actioned_at TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES reconciliation_sessions(id) ON DELETE CASCADE
+                );
+
                 -- Indexes for common queries
                 CREATE INDEX IF NOT EXISTS idx_accounts_entity_id ON accounts(entity_id);
                 CREATE INDEX IF NOT EXISTS idx_positions_account_id ON positions(account_id);
@@ -168,6 +202,8 @@ class PostgresDatabase:
                 CREATE INDEX IF NOT EXISTS idx_entries_account_id ON entries(account_id);
                 CREATE INDEX IF NOT EXISTS idx_tax_lots_position_id ON tax_lots(position_id);
                 CREATE INDEX IF NOT EXISTS idx_tax_lots_acquisition_date ON tax_lots(acquisition_date);
+                CREATE INDEX IF NOT EXISTS idx_reconciliation_sessions_account_id ON reconciliation_sessions(account_id);
+                CREATE INDEX IF NOT EXISTS idx_reconciliation_matches_session_id ON reconciliation_matches(session_id);
                 """
             )
         conn.commit()
@@ -1051,3 +1087,199 @@ class PostgresTaxLotRepository(TaxLotRepository):
         # Set created_at directly
         object.__setattr__(lot, "created_at", datetime.fromisoformat(row["created_at"]))
         return lot
+
+
+class PostgresReconciliationSessionRepository(ReconciliationSessionRepository):
+    """PostgreSQL implementation of ReconciliationSessionRepository."""
+
+    def __init__(self, database: PostgresDatabase) -> None:
+        self._db = database
+
+    def add(self, session: ReconciliationSession) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO reconciliation_sessions (id, account_id, file_name, file_format,
+                                                      status, created_at, closed_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(session.id),
+                    str(session.account_id),
+                    session.file_name,
+                    session.file_format,
+                    session.status.value,
+                    session.created_at.isoformat(),
+                    session.closed_at.isoformat() if session.closed_at else None,
+                ),
+            )
+            for match in session.matches:
+                cur.execute(
+                    """
+                    INSERT INTO reconciliation_matches (id, session_id, imported_id, imported_date,
+                                                         imported_amount, imported_description,
+                                                         suggested_ledger_txn_id, confidence_score,
+                                                         status, actioned_at, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        str(match.id),
+                        str(session.id),
+                        match.imported_id,
+                        match.imported_date.isoformat(),
+                        str(match.imported_amount),
+                        match.imported_description,
+                        str(match.suggested_ledger_txn_id)
+                        if match.suggested_ledger_txn_id
+                        else None,
+                        match.confidence_score,
+                        match.status.value,
+                        match.actioned_at.isoformat() if match.actioned_at else None,
+                        match.created_at.isoformat(),
+                    ),
+                )
+        conn.commit()
+
+    def get(self, session_id: UUID) -> ReconciliationSession | None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM reconciliation_sessions WHERE id = %s",
+                (str(session_id),),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_session(row)
+
+    def get_pending_for_account(self, account_id: UUID) -> ReconciliationSession | None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM reconciliation_sessions WHERE account_id = %s AND status = %s",
+                (str(account_id), ReconciliationSessionStatus.PENDING.value),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_session(row)
+
+    def update(self, session: ReconciliationSession) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE reconciliation_sessions SET
+                    account_id = %s,
+                    file_name = %s,
+                    file_format = %s,
+                    status = %s,
+                    closed_at = %s
+                WHERE id = %s
+                """,
+                (
+                    str(session.account_id),
+                    session.file_name,
+                    session.file_format,
+                    session.status.value,
+                    session.closed_at.isoformat() if session.closed_at else None,
+                    str(session.id),
+                ),
+            )
+            cur.execute(
+                "DELETE FROM reconciliation_matches WHERE session_id = %s",
+                (str(session.id),),
+            )
+            for match in session.matches:
+                cur.execute(
+                    """
+                    INSERT INTO reconciliation_matches (id, session_id, imported_id, imported_date,
+                                                         imported_amount, imported_description,
+                                                         suggested_ledger_txn_id, confidence_score,
+                                                         status, actioned_at, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        str(match.id),
+                        str(session.id),
+                        match.imported_id,
+                        match.imported_date.isoformat(),
+                        str(match.imported_amount),
+                        match.imported_description,
+                        str(match.suggested_ledger_txn_id)
+                        if match.suggested_ledger_txn_id
+                        else None,
+                        match.confidence_score,
+                        match.status.value,
+                        match.actioned_at.isoformat() if match.actioned_at else None,
+                        match.created_at.isoformat(),
+                    ),
+                )
+        conn.commit()
+
+    def delete(self, session_id: UUID) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM reconciliation_sessions WHERE id = %s", (str(session_id),)
+            )
+        conn.commit()
+
+    def list_by_account(self, account_id: UUID) -> list[ReconciliationSession]:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM reconciliation_sessions WHERE account_id = %s",
+                (str(account_id),),
+            )
+            rows = cur.fetchall()
+        return [self._row_to_session(row) for row in rows]
+
+    def _row_to_session(self, row: Any) -> ReconciliationSession:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM reconciliation_matches WHERE session_id = %s ORDER BY created_at ASC",
+                (row["id"],),
+            )
+            match_rows = cur.fetchall()
+        matches = [self._row_to_match(match_row) for match_row in match_rows]
+
+        session = ReconciliationSession(
+            account_id=UUID(row["account_id"]),
+            file_name=row["file_name"],
+            file_format=row["file_format"],
+            id=UUID(row["id"]),
+            status=ReconciliationSessionStatus(row["status"]),
+            matches=matches,
+            closed_at=datetime.fromisoformat(row["closed_at"])
+            if row["closed_at"]
+            else None,
+        )
+        object.__setattr__(
+            session, "created_at", datetime.fromisoformat(row["created_at"])
+        )
+        return session
+
+    def _row_to_match(self, row: Any) -> ReconciliationMatch:
+        match = ReconciliationMatch(
+            session_id=UUID(row["session_id"]),
+            imported_id=row["imported_id"],
+            imported_date=date.fromisoformat(row["imported_date"]),
+            imported_amount=Decimal(row["imported_amount"]),
+            id=UUID(row["id"]),
+            imported_description=row["imported_description"],
+            suggested_ledger_txn_id=UUID(row["suggested_ledger_txn_id"])
+            if row["suggested_ledger_txn_id"]
+            else None,
+            confidence_score=row["confidence_score"],
+            status=ReconciliationMatchStatus(row["status"]),
+            actioned_at=datetime.fromisoformat(row["actioned_at"])
+            if row["actioned_at"]
+            else None,
+        )
+        object.__setattr__(
+            match, "created_at", datetime.fromisoformat(row["created_at"])
+        )
+        return match
