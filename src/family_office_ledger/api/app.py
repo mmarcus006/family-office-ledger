@@ -6,6 +6,7 @@ from family_office_ledger.api.routes import (
     account_router,
     entity_router,
     health_router,
+    qsbs_router,
     reconciliation_router,
     report_router,
     transaction_router,
@@ -54,6 +55,7 @@ def create_app() -> FastAPI:
     app.include_router(report_router)
     app.include_router(reconciliation_router)
     app.include_router(transfer_router)
+    app.include_router(qsbs_router)
 
     return app
 

@@ -249,3 +249,45 @@ class TransferSummaryResponse(BaseModel):
     confirmed_count: int
     rejected_count: int
     total_confirmed_amount: str
+
+
+# QSBS Schemas
+class MarkQSBSRequest(BaseModel):
+    qualification_date: date
+
+
+class SecurityResponse(BaseModel):
+    id: UUID
+    symbol: str
+    name: str
+    cusip: str | None
+    isin: str | None
+    asset_class: str
+    is_qsbs_eligible: bool
+    qsbs_qualification_date: date | None
+    issuer: str | None
+    is_active: bool
+
+
+class QSBSHoldingResponse(BaseModel):
+    security_id: UUID
+    security_symbol: str
+    security_name: str
+    position_id: UUID
+    acquisition_date: date
+    quantity: str
+    cost_basis: str
+    holding_period_days: int
+    is_qualified: bool
+    days_until_qualified: int
+    potential_exclusion: str
+    issuer: str | None
+
+
+class QSBSSummaryResponse(BaseModel):
+    total_qsbs_holdings: int
+    qualified_holdings: int
+    pending_holdings: int
+    total_cost_basis: str
+    total_potential_exclusion: str
+    holdings: list[QSBSHoldingResponse]

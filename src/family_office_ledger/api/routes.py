@@ -17,9 +17,13 @@ from family_office_ledger.api.schemas import (
     EntityResponse,
     EntryResponse,
     HealthResponse,
+    MarkQSBSRequest,
     MatchListResponse,
     MatchResponse,
+    QSBSHoldingResponse,
+    QSBSSummaryResponse,
     ReportResponse,
+    SecurityResponse,
     SessionResponse,
     SessionSummaryResponse,
     TransactionCreate,
@@ -80,6 +84,10 @@ from family_office_ledger.domain.transfer_matching import (
     TransferMatchingSession,
     TransferMatchStatus,
 )
+from family_office_ledger.services.qsbs import (
+    QSBSService,
+    SecurityNotFoundError,
+)
 
 # Create routers
 health_router = APIRouter(tags=["health"])
@@ -89,6 +97,7 @@ transaction_router = APIRouter(prefix="/transactions", tags=["transactions"])
 report_router = APIRouter(prefix="/reports", tags=["reports"])
 reconciliation_router = APIRouter(prefix="/reconciliation", tags=["reconciliation"])
 transfer_router = APIRouter(prefix="/transfers", tags=["transfers"])
+qsbs_router = APIRouter(prefix="/qsbs", tags=["qsbs"])
 
 
 # Dependency injection functions
@@ -1051,4 +1060,127 @@ def get_transfer_summary(
         confirmed_count=summary.confirmed_count,
         rejected_count=summary.rejected_count,
         total_confirmed_amount=str(summary.total_confirmed_amount),
+    )
+
+
+# QSBS Endpoints
+def get_qsbs_service(db: SQLiteDatabase) -> QSBSService:
+    security_repo = SQLiteSecurityRepository(db)
+    position_repo = SQLitePositionRepository(db)
+    tax_lot_repo = SQLiteTaxLotRepository(db)
+    return QSBSService(
+        security_repo=security_repo,
+        position_repo=position_repo,
+        tax_lot_repo=tax_lot_repo,
+    )
+
+
+def _security_to_response(security: Any) -> SecurityResponse:
+    return SecurityResponse(
+        id=security.id,
+        symbol=security.symbol,
+        name=security.name,
+        cusip=security.cusip,
+        isin=security.isin,
+        asset_class=security.asset_class.value,
+        is_qsbs_eligible=security.is_qsbs_eligible,
+        qsbs_qualification_date=security.qsbs_qualification_date,
+        issuer=security.issuer,
+        is_active=security.is_active,
+    )
+
+
+@qsbs_router.get("/securities", response_model=list[SecurityResponse])
+def list_qsbs_eligible_securities(
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> list[SecurityResponse]:
+    qsbs_service = get_qsbs_service(db)
+    securities = qsbs_service.list_qsbs_eligible_securities()
+    return [_security_to_response(s) for s in securities]
+
+
+@qsbs_router.post(
+    "/securities/{security_id}/mark-eligible",
+    response_model=SecurityResponse,
+)
+def mark_security_qsbs_eligible(
+    security_id: UUID,
+    payload: MarkQSBSRequest,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> SecurityResponse:
+    qsbs_service = get_qsbs_service(db)
+
+    try:
+        security = qsbs_service.mark_security_qsbs_eligible(
+            security_id=security_id,
+            qualification_date=payload.qualification_date,
+        )
+    except SecurityNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return _security_to_response(security)
+
+
+@qsbs_router.post(
+    "/securities/{security_id}/remove-eligible",
+    response_model=SecurityResponse,
+)
+def remove_security_qsbs_eligibility(
+    security_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> SecurityResponse:
+    qsbs_service = get_qsbs_service(db)
+
+    try:
+        security = qsbs_service.remove_qsbs_eligibility(security_id)
+    except SecurityNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return _security_to_response(security)
+
+
+@qsbs_router.get("/summary", response_model=QSBSSummaryResponse)
+def get_qsbs_summary(
+    db: Annotated[SQLiteDatabase, Depends()],
+    as_of_date: date | None = Query(default=None),
+    entity_ids: list[UUID] | None = Query(default=None),
+) -> QSBSSummaryResponse:
+    qsbs_service = get_qsbs_service(db)
+
+    summary = qsbs_service.get_qsbs_summary(
+        entity_ids=entity_ids,
+        as_of_date=as_of_date,
+    )
+
+    holdings = [
+        QSBSHoldingResponse(
+            security_id=h.security_id,
+            security_symbol=h.security_symbol,
+            security_name=h.security_name,
+            position_id=h.position_id,
+            acquisition_date=h.acquisition_date,
+            quantity=str(h.quantity),
+            cost_basis=str(h.cost_basis),
+            holding_period_days=h.holding_period_days,
+            is_qualified=h.is_qualified,
+            days_until_qualified=h.days_until_qualified,
+            potential_exclusion=str(h.potential_exclusion),
+            issuer=h.issuer,
+        )
+        for h in summary.holdings
+    ]
+
+    return QSBSSummaryResponse(
+        total_qsbs_holdings=summary.total_qsbs_holdings,
+        qualified_holdings=summary.qualified_holdings,
+        pending_holdings=summary.pending_holdings,
+        total_cost_basis=str(summary.total_cost_basis),
+        total_potential_exclusion=str(summary.total_potential_exclusion),
+        holdings=holdings,
     )

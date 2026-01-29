@@ -38,6 +38,12 @@ from family_office_ledger.services.transfer_matching import (
     TransferSessionExistsError,
     TransferSessionNotFoundError,
 )
+from family_office_ledger.services.qsbs import (
+    QSBSHolding,
+    QSBSService,
+    QSBSSummary,
+    SecurityNotFoundError,
+)
 
 __all__ = [
     "AccountNotFoundError",
@@ -51,12 +57,16 @@ __all__ = [
     "LotMatchingServiceImpl",
     "MatchNotFoundError",
     "MatchResult",
+    "QSBSHolding",
+    "QSBSService",
+    "QSBSSummary",
     "ReconciliationService",
     "ReconciliationServiceImpl",
     "ReconciliationSummary",
     "ReportingService",
     "ReportingServiceImpl",
     "SecurityLookup",
+    "SecurityNotFoundError",
     "SessionExistsError",
     "SessionNotFoundError",
     "SessionSummary",

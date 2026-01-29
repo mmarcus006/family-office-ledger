@@ -32,6 +32,7 @@ from family_office_ledger.services.transfer_matching import (
     TransferSessionNotFoundError,
 )
 from family_office_ledger.domain.transfer_matching import TransferMatchStatus
+from family_office_ledger.services.qsbs import QSBSService, SecurityNotFoundError
 
 
 def get_default_db_path() -> Path:
@@ -196,19 +197,40 @@ def cmd_ingest(args: argparse.Namespace) -> int:
 
 
 def cmd_ui(args: argparse.Namespace) -> int:
-    """Launch the NiceGUI web interface."""
+    """Launch the Streamlit web interface."""
     try:
-        from family_office_ledger.ui.main import run
+        import streamlit.web.cli as stcli
     except ImportError:
         print("Frontend dependencies are not installed.")
-        print("Install with: uv sync --dev --extra frontend")
+        print("Install with: uv sync --all-extras")
         return 1
+
+    import os
+    from pathlib import Path
 
     port = int(args.port)
     api_url = str(args.api_url)
-    reload = not bool(args.no_reload)
 
-    run(port=port, api_url=api_url, reload=reload)
+    app_path = Path(__file__).parent / "streamlit_app" / "app.py"
+    if not app_path.exists():
+        print(f"Error: Streamlit app not found at {app_path}")
+        return 1
+
+    os.environ["STREAMLIT_SERVER_PORT"] = str(port)
+    os.environ["FOL_API_URL"] = api_url
+
+    sys.argv = [
+        "streamlit",
+        "run",
+        str(app_path),
+        "--server.port",
+        str(port),
+        "--server.headless",
+        "true",
+        "--browser.gatherUsageStats",
+        "false",
+    ]
+    stcli.main()
     return 0
 
 
@@ -722,8 +744,164 @@ def cmd_transfer_summary(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_qsbs_list(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        security_repo = SQLiteSecurityRepository(db)
+        position_repo = SQLitePositionRepository(db)
+        tax_lot_repo = SQLiteTaxLotRepository(db)
+        service = QSBSService(security_repo, position_repo, tax_lot_repo)
+
+        securities = service.list_qsbs_eligible_securities()
+
+        if not securities:
+            print("No QSBS-eligible securities found")
+            return 0
+
+        print(f"{'Symbol':<12} {'Name':<30} {'Qualification Date':<20} {'Issuer'}")
+        print("-" * 85)
+        for sec in securities:
+            qual_date = (
+                sec.qsbs_qualification_date.isoformat()
+                if sec.qsbs_qualification_date
+                else "N/A"
+            )
+            issuer = sec.issuer or "N/A"
+            print(f"{sec.symbol:<12} {sec.name[:28]:<30} {qual_date:<20} {issuer}")
+
+        print(f"\nTotal: {len(securities)} QSBS-eligible securities")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_qsbs_mark(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        security_id = UUID(args.security_id)
+    except ValueError:
+        print(f"Error: Invalid security ID: {args.security_id}")
+        return 1
+
+    try:
+        from datetime import date as dt_date
+
+        qual_date = dt_date.fromisoformat(args.qualification_date)
+    except ValueError:
+        print(f"Error: Invalid date format: {args.qualification_date}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        security_repo = SQLiteSecurityRepository(db)
+        position_repo = SQLitePositionRepository(db)
+        tax_lot_repo = SQLiteTaxLotRepository(db)
+        service = QSBSService(security_repo, position_repo, tax_lot_repo)
+
+        security = service.mark_security_qsbs_eligible(security_id, qual_date)
+        print(f"Marked {security.symbol} ({security.name}) as QSBS-eligible")
+        print(f"  Qualification date: {qual_date}")
+        return 0
+
+    except SecurityNotFoundError:
+        print("Error: Security not found")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_qsbs_remove(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        security_id = UUID(args.security_id)
+    except ValueError:
+        print(f"Error: Invalid security ID: {args.security_id}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        security_repo = SQLiteSecurityRepository(db)
+        position_repo = SQLitePositionRepository(db)
+        tax_lot_repo = SQLiteTaxLotRepository(db)
+        service = QSBSService(security_repo, position_repo, tax_lot_repo)
+
+        security = service.remove_qsbs_eligibility(security_id)
+        print(f"Removed QSBS eligibility from {security.symbol} ({security.name})")
+        return 0
+
+    except SecurityNotFoundError:
+        print("Error: Security not found")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_qsbs_summary(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        as_of_date = None
+        if args.as_of:
+            from datetime import date as dt_date
+
+            as_of_date = dt_date.fromisoformat(args.as_of)
+
+        db = SQLiteDatabase(str(db_path))
+        security_repo = SQLiteSecurityRepository(db)
+        position_repo = SQLitePositionRepository(db)
+        tax_lot_repo = SQLiteTaxLotRepository(db)
+        service = QSBSService(security_repo, position_repo, tax_lot_repo)
+
+        summary = service.get_qsbs_summary(as_of_date=as_of_date)
+
+        print("QSBS Holdings Summary")
+        print(f"  Total Holdings: {summary.total_qsbs_holdings}")
+        print(f"  Qualified (5+ years): {summary.qualified_holdings}")
+        print(f"  Pending: {summary.pending_holdings}")
+        print(f"  Total Cost Basis: ${summary.total_cost_basis:,.2f}")
+        print(f"  Potential Exclusion: ${summary.total_potential_exclusion:,.2f}")
+
+        if summary.holdings:
+            print(
+                f"\n{'Symbol':<12} {'Held (days)':<12} {'Qualified':<10} {'Days Left':<12} {'Potential Exclusion'}"
+            )
+            print("-" * 70)
+            for h in summary.holdings:
+                status = "YES" if h.is_qualified else "NO"
+                days_left = "-" if h.is_qualified else str(h.days_until_qualified)
+                print(
+                    f"{h.security_symbol:<12} {h.holding_period_days:<12} {status:<10} "
+                    f"{days_left:<12} ${h.potential_exclusion:,.2f}"
+                )
+
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Main CLI entry point."""
     parser = argparse.ArgumentParser(
         prog="fol",
         description="Family Office Ledger - Multi-entity accounting and investment tracking",
@@ -770,7 +948,7 @@ def main(argv: list[str] | None = None) -> int:
     ingest_parser.set_defaults(func=cmd_ingest)
 
     # ui command
-    ui_parser = subparsers.add_parser("ui", help="Launch the NiceGUI web interface")
+    ui_parser = subparsers.add_parser("ui", help="Launch the Streamlit web interface")
     ui_parser.add_argument(
         "--port",
         type=int,
@@ -956,6 +1134,46 @@ def main(argv: list[str] | None = None) -> int:
     )
     transfer_summary_parser.set_defaults(func=cmd_transfer_summary)
 
+    # qsbs command group
+    qsbs_parser = subparsers.add_parser("qsbs", help="QSBS tracking commands")
+    qsbs_subparsers = qsbs_parser.add_subparsers(
+        dest="qsbs_command", help="QSBS subcommands"
+    )
+
+    # qsbs list
+    qsbs_list_parser = qsbs_subparsers.add_parser(
+        "list", help="List QSBS-eligible securities"
+    )
+    qsbs_list_parser.set_defaults(func=cmd_qsbs_list)
+
+    # qsbs mark
+    qsbs_mark_parser = qsbs_subparsers.add_parser(
+        "mark", help="Mark a security as QSBS-eligible"
+    )
+    qsbs_mark_parser.add_argument(
+        "--security-id", required=True, help="Security ID to mark"
+    )
+    qsbs_mark_parser.add_argument(
+        "--qualification-date",
+        required=True,
+        help="QSBS qualification date (YYYY-MM-DD)",
+    )
+    qsbs_mark_parser.set_defaults(func=cmd_qsbs_mark)
+
+    # qsbs remove
+    qsbs_remove_parser = qsbs_subparsers.add_parser(
+        "remove", help="Remove QSBS eligibility from a security"
+    )
+    qsbs_remove_parser.add_argument("--security-id", required=True, help="Security ID")
+    qsbs_remove_parser.set_defaults(func=cmd_qsbs_remove)
+
+    # qsbs summary
+    qsbs_summary_parser = qsbs_subparsers.add_parser(
+        "summary", help="Show QSBS holdings summary"
+    )
+    qsbs_summary_parser.add_argument("--as-of", help="As-of date (YYYY-MM-DD)")
+    qsbs_summary_parser.set_defaults(func=cmd_qsbs_summary)
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -972,6 +1190,12 @@ def main(argv: list[str] | None = None) -> int:
         not hasattr(args, "transfer_command") or args.transfer_command is None
     ):
         transfer_parser.print_help()
+        return 0
+
+    if args.command == "qsbs" and (
+        not hasattr(args, "qsbs_command") or args.qsbs_command is None
+    ):
+        qsbs_parser.print_help()
         return 0
 
     result: int = args.func(args)
