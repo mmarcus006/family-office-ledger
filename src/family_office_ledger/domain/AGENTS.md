@@ -1,7 +1,7 @@
 # DOMAIN LAYER
 
 ## OVERVIEW
-Core accounting domain: entities, transactions, tax lots, reconciliation, exchange rates, and value objects.
+Core accounting domain: entities, transactions, tax lots, reconciliation, exchange rates, budgets, and value objects.
 
 ## WHERE TO LOOK
 | Task | Location | Notes |
@@ -15,7 +15,8 @@ Core accounting domain: entities, transactions, tax lots, reconciliation, exchan
 | Documents | documents.py | Document, TaxDocLine |
 | Audit | audit.py | AuditEntry, AuditAction enum |
 | Exchange rates | exchange_rates.py | ExchangeRate (frozen dataclass) |
-| Vendors | vendors.py | Vendor, ExpenseCategory enum |
+| Vendors | vendors.py | Vendor dataclass |
+| Budgets | budgets.py | Budget, BudgetLineItem, BudgetVariance, BudgetPeriodType |
 
 ## CONVENTIONS
 - Dataclasses with `id: UUID = field(default_factory=uuid4)`
@@ -25,8 +26,8 @@ Core accounting domain: entities, transactions, tax lots, reconciliation, exchan
 - Validation in `__post_init__` or dedicated `validate()` methods
 - Domain exceptions in transactions.py (UnbalancedTransactionError, etc.)
 
-## ENUMS (10 total)
-Currency (19), EntityType (5), AccountType (5), AccountSubType (15), AssetClass (8), AcquisitionType (8), CorporateActionType (8), TransactionType (23), ExpenseCategory (19), LotSelection (7)
+## ENUMS (11 total)
+Currency (19), EntityType (5), AccountType (5), AccountSubType (15), AssetClass (8), AcquisitionType (8), CorporateActionType (8), TransactionType (23), ExpenseCategory (19), LotSelection (7), BudgetPeriodType (4)
 
 ## ANTI-PATTERNS (THIS PROJECT)
 - None documented.
@@ -36,3 +37,4 @@ Currency (19), EntityType (5), AccountType (5), AccountSubType (15), AssetClass 
 - Position uses private fields (`_quantity`, `_cost_basis`) with property accessors
 - TaxLot tracks `original_quantity` vs `remaining_quantity` for partial dispositions
 - ReconciliationMatch statuses: PENDING, CONFIRMED, REJECTED, SKIPPED
+- BudgetVariance is frozen dataclass with computed properties (variance_percent, is_over_budget)

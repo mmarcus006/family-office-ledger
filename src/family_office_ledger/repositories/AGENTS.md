@@ -1,14 +1,14 @@
 # REPOSITORIES LAYER
 
 ## OVERVIEW
-Persistence interfaces and implementations for SQLite and PostgreSQL. 9 repository interfaces.
+Persistence interfaces and implementations for SQLite and PostgreSQL. 11 repository interfaces.
 
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
-| Interfaces | interfaces.py | 9 ABCs (Entity, Account, Security, Position, Transaction, TaxLot, ReconciliationSession, ExchangeRate, Vendor) |
-| SQLite | sqlite.py | 1579 lines, 10 repository classes |
-| Postgres | postgres.py | 1650 lines, mirrors SQLite implementation |
+| Interfaces | interfaces.py | 11 ABCs (Entity, Account, Security, Position, Transaction, TaxLot, ReconciliationSession, ExchangeRate, Vendor, Budget) |
+| SQLite | sqlite.py | 1799 lines, 11 repository classes |
+| Postgres | postgres.py | 1885 lines, mirrors SQLite implementation |
 | Public exports | __init__.py | optional Postgres via try/except |
 
 ## CONVENTIONS
@@ -30,13 +30,15 @@ Persistence interfaces and implementations for SQLite and PostgreSQL. 9 reposito
 | ReconciliationSessionRepository | 6 | get_pending_for_account |
 | ExchangeRateRepository | 7 | get_rate, get_latest_rate, list_by_currency_pair |
 | VendorRepository | 8 | get_by_tax_id, search_by_name, list_by_category |
+| BudgetRepository | 10 | add, get, update, delete, list_by_entity, get_active_for_date, add/get/update/delete_line_item |
 
 ## ANTI-PATTERNS (THIS PROJECT)
-- **CRITICAL**: sqlite.py and postgres.py are 95% identical (1579 vs 1650 lines) - only SQL syntax differs (`?` vs `%s`). Consolidation candidate.
+- **CRITICAL**: sqlite.py and postgres.py are 95% identical (~3700 lines total) - only SQL syntax differs (`?` vs `%s`). Consolidation candidate.
 
 ## NOTES
 - Postgres optional: conditional import in __init__.py
-- Schema in `initialize()` method (~200 lines CREATE TABLE)
+- Schema in `initialize()` method (~250 lines CREATE TABLE)
 - ReconciliationSession uses cascade delete for matches
+- Budget uses cascade delete for line items
 - Uses `object.__setattr__()` to bypass frozen dataclass constraints during row mapping
 - Schema evolution via `_add_migration_columns()` with `ALTER TABLE ADD COLUMN IF NOT EXISTS`

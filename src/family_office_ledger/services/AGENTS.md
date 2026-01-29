@@ -1,7 +1,7 @@
 # SERVICES LAYER
 
 ## OVERVIEW
-Business logic orchestration over domain models and repository interfaces. 16 services total.
+Business logic orchestration over domain models and repository interfaces. 17 services total.
 
 ## WHERE TO LOOK
 | Task | Location | Notes |
@@ -11,7 +11,7 @@ Business logic orchestration over domain models and repository interfaces. 16 se
 | Transfer matching | transfer_matching.py | inter-account transfer pairing |
 | Transaction classification | transaction_classifier.py | rules engine |
 | Ledger posting | ledger.py | double-entry validation |
-| Reporting | reporting.py | 776 lines, net worth, balance sheet, PnL |
+| Reporting | reporting.py | 850 lines, net worth, balance sheet, PnL, budget reports |
 | Tax lot matching | lot_matching.py | FIFO/LIFO/SPECIFIC_ID/etc. |
 | Corporate actions | corporate_actions.py | splits, spinoffs, mergers |
 | Audit | audit.py | audit trail logging |
@@ -19,10 +19,12 @@ Business logic orchestration over domain models and repository interfaces. 16 se
 | Portfolio analytics | portfolio_analytics.py | allocation, concentration, performance |
 | QSBS | qsbs.py | IRC §1202 tracking |
 | Tax documents | tax_documents.py | Form 8949, Schedule D |
+| Expense | expense.py | expense categorization and reporting |
+| Budget | budget.py | budget management, variance, alerts |
 | Interfaces | interfaces.py | ABCs + shared DTOs (MatchResult, LotDisposition) |
 
 ## CONVENTIONS
-- Service implementations use `*Impl` suffix (6 services have interfaces)
+- Service implementations use `*Impl` suffix (7 services have interfaces)
 - Constructor injection of repository interfaces
 - Interfaces and shared DTOs in interfaces.py
 - Exceptions defined in same module, re-exported via `__init__.py`
@@ -36,6 +38,8 @@ Business logic orchestration over domain models and repository interfaces. 16 se
 | LotMatchingService | LotMatchingServiceImpl | Yes |
 | CorporateActionService | CorporateActionServiceImpl | Yes |
 | CurrencyService | CurrencyServiceImpl | Yes |
+| ExpenseService | ExpenseServiceImpl | Yes |
+| BudgetService | BudgetServiceImpl | Yes |
 | TransferMatchingService | - | No |
 | QSBSService | - | No |
 | TaxDocumentService | - | No |
@@ -56,3 +60,4 @@ Business logic orchestration over domain models and repository interfaces. 16 se
 - ingestion.py is the largest hotspot (1216 lines, 23 booking methods)
 - Reconciliation uses fuzzy matching: exact amount (50pts) + date proximity (30pts) + memo similarity (20pts)
 - Auto-close triggers when all matches are CONFIRMED or REJECTED (not SKIPPED)
+- BudgetService.check_alerts() returns alerts at thresholds: 80%, 90%, 100%, 110%

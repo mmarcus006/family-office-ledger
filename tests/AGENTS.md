@@ -1,18 +1,18 @@
 # TEST SUITE
 
 ## OVERVIEW
-Pytest suite: 961 tests across 46 modules covering domain, services, repositories, parsers, API, CLI, and UI.
+Pytest suite: 1145 tests across 54 modules covering domain, services, repositories, parsers, API, CLI, and UI.
 
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
 | Shared fixtures | conftest.py | 10 domain fixtures (sample_entity, sample_account, etc.) |
 | Domain tests | test_entities.py, test_value_objects.py, test_transactions.py | |
-| Service tests | test_*_service.py | ingestion, ledger, reporting, reconciliation, lot_matching, corporate_action |
-| Repository tests | test_repositories_sqlite.py, test_repositories_postgres.py | |
+| Service tests | test_*_service.py | ingestion, ledger, reporting, reconciliation, lot_matching, corporate_action, budget |
+| Repository tests | test_repositories_sqlite.py, test_repositories_postgres.py, test_budget_repository.py | |
 | Parser tests | test_parsers.py, test_bank_parsers.py | |
-| API tests | test_api.py, test_reconciliation_api.py, test_currency_api.py | FastAPI TestClient |
-| CLI tests | test_cli.py, test_reconciliation_cli.py, test_currency_cli.py | |
+| API tests | test_api.py, test_reconciliation_api.py, test_currency_api.py, test_budget_api.py | FastAPI TestClient |
+| CLI tests | test_cli.py, test_reconciliation_cli.py, test_currency_cli.py, test_budget_cli.py | |
 | UI tests | ui/test_*.py | async tests with ASGITransport |
 | Streamlit tests | streamlit_app/test_*.py | mock-based tests |
 
@@ -28,13 +28,15 @@ Pytest suite: 961 tests across 46 modules covering domain, services, repositorie
 | Category | Tests |
 |----------|-------|
 | Reconciliation | ~150 |
-| Repositories | ~160 |
-| Services | ~250 |
-| Domain | ~100 |
-| API | ~100 |
-| CLI | ~100 |
+| Repositories | ~180 |
+| Services | ~280 |
+| Domain | ~120 |
+| API | ~120 |
+| CLI | ~120 |
 | UI/Streamlit | ~60 |
-| Currency/Exchange | ~40 |
+| Currency/Exchange | ~132 |
+| Expense | ~102 |
+| Budget | ~91 |
 
 ## FIXTURE PATTERNS
 ```python
@@ -64,8 +66,8 @@ async def api_client(api_app):
 - None documented.
 
 ## NOTES
-- Large test files: test_ingestion_service.py (1913 lines), test_repositories_postgres.py (1810 lines)
+- Large test files: test_ingestion_service.py (1913 lines), test_repositories_postgres.py (2165 lines)
 - Mypy relaxed for tests: `disallow_untyped_defs = false`
 - Coverage configured in pyproject.toml with branch coverage
-- Postgres tests skipped if psycopg2 not installed (80 tests)
+- Postgres tests skipped if psycopg2 not installed (94 tests)
 - Streamlit tests use mock httpx.Client that routes to TestClient
