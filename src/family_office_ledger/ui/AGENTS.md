@@ -1,7 +1,7 @@
-# UI LAYER
+# UI LAYER (NiceGUI)
 
 ## OVERVIEW
-NiceGUI frontend with 5 pages, reusable components, and global state management.
+NiceGUI frontend with 5 pages, reusable components, and global state management. Alternative to Streamlit UI.
 
 ## STRUCTURE
 ```
@@ -61,3 +61,4 @@ class AppState:
 - Optional dependency: `family-office-ledger[frontend]`
 - API client uses httpx AsyncClient with ASGITransport for testing
 - Shell layout applied to all pages via `shell()` function
+- **Not currently wired to CLI** - use `fol ui` for Streamlit instead

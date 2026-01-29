@@ -1,17 +1,21 @@
 # DOMAIN LAYER
 
 ## OVERVIEW
-Core accounting domain: entities, transactions, tax lots, reconciliation, and value objects.
+Core accounting domain: entities, transactions, tax lots, reconciliation, exchange rates, and value objects.
 
 ## WHERE TO LOOK
 | Task | Location | Notes |
 |------|----------|-------|
 | Entities/accounts | entities.py | Entity, Account, Security, Position |
 | Transactions | transactions.py | Transaction, Entry, TaxLot + exceptions |
-| Value objects | value_objects.py | Money, Quantity (frozen), 8 enums |
+| Value objects | value_objects.py | Money, Quantity (frozen), 10 enums |
 | Reconciliation | reconciliation.py | ReconciliationSession, ReconciliationMatch |
+| Transfer matching | transfer_matching.py | TransferMatchingSession, TransferMatch |
 | Corporate actions | corporate_actions.py | CorporateAction, Price |
 | Documents | documents.py | Document, TaxDocLine |
+| Audit | audit.py | AuditEntry, AuditAction enum |
+| Exchange rates | exchange_rates.py | ExchangeRate (frozen dataclass) |
+| Vendors | vendors.py | Vendor, ExpenseCategory enum |
 
 ## CONVENTIONS
 - Dataclasses with `id: UUID = field(default_factory=uuid4)`
@@ -20,6 +24,9 @@ Core accounting domain: entities, transactions, tax lots, reconciliation, and va
 - Value objects: `@dataclass(frozen=True, slots=True)`
 - Validation in `__post_init__` or dedicated `validate()` methods
 - Domain exceptions in transactions.py (UnbalancedTransactionError, etc.)
+
+## ENUMS (10 total)
+Currency (19), EntityType (5), AccountType (5), AccountSubType (15), AssetClass (8), AcquisitionType (8), CorporateActionType (8), TransactionType (23), ExpenseCategory (19), LotSelection (7)
 
 ## ANTI-PATTERNS (THIS PROJECT)
 - None documented.
