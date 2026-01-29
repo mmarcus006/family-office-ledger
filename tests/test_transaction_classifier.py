@@ -8,7 +8,7 @@ from decimal import Decimal
 
 import pytest
 
-from family_office_ledger.domain.value_objects import TransactionType
+from family_office_ledger.domain.value_objects import ExpenseCategory, TransactionType
 from family_office_ledger.parsers.bank_parsers import ParsedTransaction
 from family_office_ledger.services.transaction_classifier import (
     SecurityLookup,
@@ -719,3 +719,178 @@ class TestEdgeCases(TestTransactionClassifier):
         )
         # UNKNOWN not in QSBS list, lookup returns False → NON_QSBS
         assert classifier_with_qsbs.classify(txn) == TransactionType.PURCHASE_NON_QSBS
+
+
+class TestExpenseCategoryInference(TestTransactionClassifier):
+    """Tests for expense category inference."""
+
+    def test_infer_legal_category(self, classifier: TransactionClassifier) -> None:
+        """Infer LEGAL category from attorney keyword."""
+        txn = make_txn(description="PAYMENT TO ATTORNEY SMITH", amount="-5000.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.LEGAL
+
+    def test_infer_accounting_category(self, classifier: TransactionClassifier) -> None:
+        """Infer ACCOUNTING category from CPA keyword."""
+        txn = make_txn(description="CPA SERVICES - TAX PREP", amount="-2500.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.ACCOUNTING
+
+    def test_infer_rent_category(self, classifier: TransactionClassifier) -> None:
+        """Infer RENT category from rent keyword."""
+        txn = make_txn(description="MONTHLY RENT PAYMENT", amount="-3000.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.RENT
+
+    def test_infer_utilities_category(self, classifier: TransactionClassifier) -> None:
+        """Infer UTILITIES category from electric keyword."""
+        txn = make_txn(description="PG&E ELECTRIC BILL", amount="-150.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.UTILITIES
+
+    def test_infer_software_category(self, classifier: TransactionClassifier) -> None:
+        """Infer SOFTWARE category from SaaS keyword."""
+        txn = make_txn(description="SLACK SUBSCRIPTION", amount="-99.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.SOFTWARE
+
+    def test_infer_payroll_category(self, classifier: TransactionClassifier) -> None:
+        """Infer PAYROLL category from payroll keyword."""
+        txn = make_txn(description="GUSTO PAYROLL PROCESSING", amount="-500.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.PAYROLL
+
+    def test_infer_travel_category(self, classifier: TransactionClassifier) -> None:
+        """Infer TRAVEL category from airline keyword."""
+        txn = make_txn(description="DELTA AIRLINES TICKET", amount="-450.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.TRAVEL
+
+    def test_infer_meals_category(self, classifier: TransactionClassifier) -> None:
+        """Infer MEALS category from restaurant keyword."""
+        txn = make_txn(description="DOORDASH RESTAURANT ORDER", amount="-35.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.MEALS
+
+    def test_infer_insurance_category(self, classifier: TransactionClassifier) -> None:
+        """Infer INSURANCE category from insurance keyword."""
+        txn = make_txn(description="GEICO INSURANCE PREMIUM", amount="-120.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.INSURANCE
+
+    def test_infer_hosting_category(self, classifier: TransactionClassifier) -> None:
+        """Infer HOSTING category from AWS keyword."""
+        txn = make_txn(description="AWS CLOUD HOSTING", amount="-250.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.HOSTING
+
+    def test_infer_marketing_category(self, classifier: TransactionClassifier) -> None:
+        """Infer MARKETING category from advertising keyword."""
+        txn = make_txn(description="GOOGLE ADS CAMPAIGN", amount="-1000.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.MARKETING
+
+    def test_infer_consulting_category(self, classifier: TransactionClassifier) -> None:
+        """Infer CONSULTING category from consultant keyword."""
+        txn = make_txn(description="MANAGEMENT CONSULTANT FEES", amount="-5000.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.CONSULTING
+
+    def test_infer_bank_fees_category(self, classifier: TransactionClassifier) -> None:
+        """Infer BANK_FEES category from wire fee keyword."""
+        txn = make_txn(description="WIRE FEE CHARGE", amount="-25.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.BANK_FEES
+
+    def test_infer_office_supplies_category(
+        self, classifier: TransactionClassifier
+    ) -> None:
+        """Infer OFFICE_SUPPLIES category from supplies keyword."""
+        txn = make_txn(description="STAPLES OFFICE SUPPLIES", amount="-75.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.OFFICE_SUPPLIES
+
+    def test_infer_hardware_category(self, classifier: TransactionClassifier) -> None:
+        """Infer HARDWARE category from laptop keyword."""
+        txn = make_txn(description="APPLE LAPTOP PURCHASE", amount="-1500.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.HARDWARE
+
+    def test_infer_charitable_category(self, classifier: TransactionClassifier) -> None:
+        """Infer CHARITABLE category from donation keyword."""
+        txn = make_txn(description="DONATION TO CHARITY", amount="-500.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.CHARITABLE
+
+    def test_infer_entertainment_category(
+        self, classifier: TransactionClassifier
+    ) -> None:
+        """Infer ENTERTAINMENT category from movie keyword."""
+        txn = make_txn(description="MOVIE THEATER TICKETS", amount="-30.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.ENTERTAINMENT
+
+    def test_infer_interest_expense_category(
+        self, classifier: TransactionClassifier
+    ) -> None:
+        """Infer INTEREST_EXPENSE category from interest expense keyword."""
+        txn = make_txn(description="LOAN INTEREST EXPENSE", amount="-200.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.INTEREST_EXPENSE
+
+    def test_no_category_match_returns_none(
+        self, classifier: TransactionClassifier
+    ) -> None:
+        """No matching keywords returns None."""
+        txn = make_txn(description="RANDOM PAYMENT XYZ123", amount="-100.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category is None
+
+    def test_category_inference_case_insensitive(
+        self, classifier: TransactionClassifier
+    ) -> None:
+        """Category inference is case-insensitive."""
+        txn = make_txn(description="attorney smith legal services", amount="-5000.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.LEGAL
+
+    def test_category_inference_from_other_party(
+        self, classifier: TransactionClassifier
+    ) -> None:
+        """Category can be inferred from other_party field."""
+        txn = make_txn(
+            description="PAYMENT",
+            amount="-3000.00",
+            other_party="DELTA AIRLINES INC",
+        )
+        _, category = classifier.classify_with_expense_category(txn)
+        assert category == ExpenseCategory.TRAVEL
+
+    def test_classify_with_expense_category_returns_tuple(
+        self, classifier: TransactionClassifier
+    ) -> None:
+        """classify_with_expense_category returns (TransactionType, ExpenseCategory|None)."""
+        txn = make_txn(description="LEGAL FEE", amount="-5000.00")
+        result = classifier.classify_with_expense_category(txn)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert isinstance(result[0], TransactionType)
+        assert result[1] is None or isinstance(result[1], ExpenseCategory)
+
+    def test_classify_with_expense_category_matches_classify(
+        self, classifier: TransactionClassifier
+    ) -> None:
+        """TransactionType from classify_with_expense_category matches classify()."""
+        txn = make_txn(description="LEGAL FEE", amount="-5000.00")
+        txn_type_only = classifier.classify(txn)
+        txn_type_with_cat, _ = classifier.classify_with_expense_category(txn)
+        assert txn_type_only == txn_type_with_cat
+
+    def test_multiple_keywords_first_match_wins(
+        self, classifier: TransactionClassifier
+    ) -> None:
+        """When multiple keywords match, first category in dict wins."""
+        txn = make_txn(description="LEGAL CONSULTING SERVICES", amount="-5000.00")
+        _, category = classifier.classify_with_expense_category(txn)
+        # Should match LEGAL first (appears first in EXPENSE_CATEGORY_KEYWORDS)
+        assert category == ExpenseCategory.LEGAL

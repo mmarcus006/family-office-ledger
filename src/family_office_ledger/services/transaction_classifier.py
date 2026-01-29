@@ -2,11 +2,12 @@
 
 Classifies ParsedTransaction objects into TransactionType categories
 based on keyword matching, amount direction, and security lookups.
+Also infers ExpenseCategory for expense transactions.
 """
 
 from typing import Protocol
 
-from family_office_ledger.domain.value_objects import TransactionType
+from family_office_ledger.domain.value_objects import ExpenseCategory, TransactionType
 from family_office_ledger.parsers.bank_parsers import ParsedTransaction
 
 
@@ -51,6 +52,95 @@ class TransactionClassifier:
     SALE_ACTIVITY_TYPES = ["SOLD", "SALE", "REDEMPTION"]
     PURCHASE_ACTIVITY_TYPES = ["BOUGHT", "PURCHASE"]
     TRANSFER_KEYWORDS = ["WIRE TRANSFER", "ACH TRANSFER", "INTERNAL TRANSFER"]
+
+    # Keywords for expense categories (case-insensitive matching)
+    EXPENSE_CATEGORY_KEYWORDS = {
+        ExpenseCategory.LEGAL: ["attorney", "lawyer", "legal", "law firm", "counsel"],
+        ExpenseCategory.ACCOUNTING: [
+            "cpa",
+            "accountant",
+            "bookkeeper",
+            "tax prep",
+            "audit",
+        ],
+        ExpenseCategory.RENT: ["rent", "lease", "landlord", "property management"],
+        ExpenseCategory.UTILITIES: [
+            "electric",
+            "gas",
+            "water",
+            "utility",
+            "power",
+            "pg&e",
+            "con ed",
+        ],
+        ExpenseCategory.SOFTWARE: [
+            "software",
+            "saas",
+            "subscription",
+            "license",
+            "slack",
+            "zoom",
+        ],
+        ExpenseCategory.PAYROLL: [
+            "payroll",
+            "salary",
+            "wages",
+            "adp",
+            "gusto",
+            "paychex",
+        ],
+        ExpenseCategory.TRAVEL: [
+            "airline",
+            "hotel",
+            "airbnb",
+            "uber",
+            "lyft",
+            "flight",
+            "travel",
+        ],
+        ExpenseCategory.MEALS: [
+            "restaurant",
+            "doordash",
+            "grubhub",
+            "cafe",
+            "catering",
+            "lunch",
+        ],
+        ExpenseCategory.INSURANCE: ["insurance", "premium", "policy", "coverage"],
+        ExpenseCategory.HOSTING: [
+            "hosting",
+            "aws",
+            "azure",
+            "cloud",
+            "server",
+            "heroku",
+        ],
+        ExpenseCategory.MARKETING: [
+            "marketing",
+            "advertising",
+            "ads",
+            "campaign",
+            "promo",
+        ],
+        ExpenseCategory.CONSULTING: ["consultant", "consulting", "advisory", "advisor"],
+        ExpenseCategory.BANK_FEES: [
+            "bank fee",
+            "wire fee",
+            "transfer fee",
+            "service charge",
+        ],
+        ExpenseCategory.OFFICE_SUPPLIES: ["office supplies", "staples", "supplies"],
+        ExpenseCategory.HARDWARE: ["hardware", "computer", "laptop", "equipment"],
+        ExpenseCategory.CHARITABLE: ["donation", "charitable", "nonprofit", "charity"],
+        ExpenseCategory.ENTERTAINMENT: [
+            "entertainment",
+            "movie",
+            "concert",
+            "theater",
+            "show",
+        ],
+        ExpenseCategory.INTEREST_EXPENSE: ["interest expense", "interest charge"],
+    }
 
     def __init__(self, security_lookup: SecurityLookup | None = None) -> None:
         """Initialize the classifier.
@@ -139,6 +229,40 @@ class TransactionClassifier:
 
         # Rule 16: UNCLASSIFIED (default fallback)
         return TransactionType.UNCLASSIFIED
+
+    def classify_with_expense_category(
+        self, txn: ParsedTransaction
+    ) -> tuple[TransactionType, ExpenseCategory | None]:
+        """Classify transaction and suggest expense category.
+
+        Args:
+            txn: The parsed transaction to classify
+
+        Returns:
+            Tuple of (TransactionType, suggested ExpenseCategory or None)
+        """
+        txn_type = self.classify(txn)
+        expense_category = self._infer_expense_category(txn)
+        return txn_type, expense_category
+
+    def _infer_expense_category(self, txn: ParsedTransaction) -> ExpenseCategory | None:
+        """Infer expense category from transaction description.
+
+        Args:
+            txn: The parsed transaction to analyze
+
+        Returns:
+            Suggested ExpenseCategory or None if no match found
+        """
+        description = (txn.description or "").lower()
+        other_party = (txn.other_party or "").lower()
+        search_text = f"{description} {other_party}"
+
+        for category, keywords in self.EXPENSE_CATEGORY_KEYWORDS.items():
+            for keyword in keywords:
+                if keyword.lower() in search_text:
+                    return category
+        return None
 
     def _build_search_text(self, txn: ParsedTransaction) -> str:
         """Build combined search text from description and other_party."""
