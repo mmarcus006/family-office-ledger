@@ -1,6 +1,13 @@
+from family_office_ledger.domain.audit import (
+    AuditAction,
+    AuditEntityType,
+    AuditEntry,
+    AuditLogSummary,
+)
 from family_office_ledger.domain.corporate_actions import CorporateAction, Price
 from family_office_ledger.domain.documents import Document, TaxDocLine
 from family_office_ledger.domain.entities import Account, Entity, Position, Security
+from family_office_ledger.domain.exchange_rates import ExchangeRate, ExchangeRateSource
 from family_office_ledger.domain.reconciliation import (
     ReconciliationMatch,
     ReconciliationMatchStatus,
@@ -15,18 +22,27 @@ from family_office_ledger.domain.transfer_matching import (
 )
 from family_office_ledger.domain.value_objects import (
     CorporateActionType,
+    ExpenseCategory,
     LotSelection,
     Money,
     Quantity,
 )
+from family_office_ledger.domain.vendors import Vendor
 
 __all__ = [
     "Account",
+    "AuditAction",
+    "AuditEntityType",
+    "AuditEntry",
+    "AuditLogSummary",
     "CorporateAction",
     "CorporateActionType",
     "Document",
     "Entity",
     "Entry",
+    "ExpenseCategory",
+    "ExchangeRate",
+    "ExchangeRateSource",
     "LotSelection",
     "Money",
     "Position",
@@ -43,4 +59,5 @@ __all__ = [
     "TransferMatch",
     "TransferMatchingSession",
     "TransferMatchStatus",
+    "Vendor",
 ]

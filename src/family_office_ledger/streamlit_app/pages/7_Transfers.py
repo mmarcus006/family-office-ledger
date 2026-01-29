@@ -2,29 +2,59 @@
 
 from __future__ import annotations
 
-import contextlib
 from datetime import date, timedelta
+from typing import Any
 
 import pandas as pd
 import streamlit as st
 
 from family_office_ledger.streamlit_app import api_client
 from family_office_ledger.streamlit_app.app import init_session_state
+from family_office_ledger.streamlit_app.styles import apply_custom_css, section_header
 
 init_session_state()
+apply_custom_css()
 
-st.title("💸 Transfer Matching")
+st.title("Transfer Matching")
 
 st.markdown(
     """
-Identify and match transfers between accounts across entities.
-The system detects potential transfer pairs based on matching amounts and dates.
-"""
+    <div style="
+        background-color: #f7fafc;
+        padding: 1rem;
+        border-radius: 8px;
+        margin-bottom: 1.5rem;
+        border-left: 4px solid #22324F;
+    ">
+        <p style="margin: 0; color: #2d3748;">
+            Identify and match transfers between accounts across entities.
+            The system detects potential transfer pairs based on matching amounts and dates.
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-entities: list[dict] = []
-with contextlib.suppress(Exception):
-    entities = api_client.list_entities()
+
+@st.cache_data(ttl=30)
+def get_entities() -> list[dict[str, Any]]:
+    """Fetch entities with caching."""
+    try:
+        return api_client.list_entities()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=30)
+def get_accounts() -> list[dict[str, Any]]:
+    """Fetch accounts with caching."""
+    try:
+        return api_client.list_accounts()
+    except Exception:
+        return []
+
+
+entities = get_entities()
 
 if not entities:
     st.warning("No entities found. Create entities first in the Entities page.")
@@ -33,7 +63,7 @@ if not entities:
 tab_create, tab_manage = st.tabs(["Create Session", "Manage Sessions"])
 
 with tab_create:
-    st.subheader("Create Transfer Matching Session")
+    section_header("Create Transfer Matching Session")
 
     entity_options = {str(e["id"]): e["name"] for e in entities}
     selected_entities = st.multiselect(
@@ -59,6 +89,11 @@ with tab_create:
             value=date.today(),
             key="transfer_end",
         )
+
+    if not isinstance(start_date, date):
+        start_date = date.today() - timedelta(days=90)
+    if not isinstance(end_date, date):
+        end_date = date.today()
 
     date_tolerance = st.slider(
         "Date Tolerance (days)",
@@ -90,7 +125,7 @@ with tab_create:
                 st.error(f"Error creating session: {e}")
 
 with tab_manage:
-    st.subheader("Manage Transfer Session")
+    section_header("Manage Transfer Session")
 
     session_id = st.text_input(
         "Session ID",
@@ -105,36 +140,45 @@ with tab_manage:
 
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Status", session.get("status", "unknown"))
+                st.metric("Status", session.get("status", "unknown"), border=True)
             with col2:
                 st.metric(
-                    "Date Tolerance", f"{session.get('date_tolerance_days', 0)} days"
+                    "Date Tolerance",
+                    f"{session.get('date_tolerance_days', 0)} days",
+                    border=True,
                 )
             with col3:
                 entity_count = len(session.get("entity_ids", []))
-                st.metric("Entities", entity_count)
+                st.metric("Entities", entity_count, border=True)
 
             try:
                 summary = api_client.get_transfer_summary(session_id)
-                st.markdown("### Session Summary")
+                st.markdown("<br>", unsafe_allow_html=True)
+                section_header("Session Summary")
                 cols = st.columns(5)
                 with cols[0]:
-                    st.metric("Total Matches", summary.get("total_matches", 0))
+                    st.metric(
+                        "Total Matches", summary.get("total_matches", 0), border=True
+                    )
                 with cols[1]:
-                    st.metric("Pending", summary.get("pending_count", 0))
+                    st.metric("Pending", summary.get("pending_count", 0), border=True)
                 with cols[2]:
-                    st.metric("Confirmed", summary.get("confirmed_count", 0))
+                    st.metric(
+                        "Confirmed", summary.get("confirmed_count", 0), border=True
+                    )
                 with cols[3]:
-                    st.metric("Rejected", summary.get("rejected_count", 0))
+                    st.metric("Rejected", summary.get("rejected_count", 0), border=True)
                 with cols[4]:
                     st.metric(
                         "Confirmed Amount",
                         f"${summary.get('total_confirmed_amount', '0')}",
+                        border=True,
                     )
             except Exception:
                 pass
 
-            st.markdown("### Transfer Matches")
+            st.markdown("<br>", unsafe_allow_html=True)
+            section_header("Transfer Matches")
 
             status_filter = st.selectbox(
                 "Filter by Status",
@@ -151,25 +195,29 @@ with tab_manage:
             matches = matches_response.get("matches", [])
 
             if matches:
-                accounts = {}
-                try:
-                    for acct in api_client.list_accounts():
-                        accounts[acct["id"]] = acct["name"]
-                except Exception:
-                    pass
+                accounts_list = get_accounts()
+                accounts_map: dict[str, str] = {}
+                for acct in accounts_list:
+                    accounts_map[acct["id"]] = acct["name"]
 
                 for match in matches:
-                    source_acct = accounts.get(
+                    source_acct = accounts_map.get(
                         match.get("source_account_id"), "Unknown"
                     )
-                    target_acct = accounts.get(
+                    target_acct = accounts_map.get(
                         match.get("target_account_id"), "Unknown"
                     )
+                    status = match.get("status", "unknown")
+                    status_color = {
+                        "pending": "#ff8700",
+                        "confirmed": "#21c354",
+                        "rejected": "#ff2b2b",
+                    }.get(status, "#718096")
 
                     with st.expander(
-                        f"${match.get('amount', '0')} | {source_acct} → {target_acct} "
-                        f"| {match.get('status', 'unknown').upper()}",
-                        expanded=match.get("status") == "pending",
+                        f"${match.get('amount', '0')} | {source_acct} -> {target_acct} "
+                        f"| {status.upper()}",
+                        expanded=status == "pending",
                     ):
                         col_info, col_actions = st.columns([3, 1])
 
@@ -192,7 +240,7 @@ with tab_manage:
 
                             if current_status == "pending":
                                 if st.button(
-                                    "✅ Confirm",
+                                    "Confirm",
                                     key=f"confirm_transfer_{match_id}",
                                     use_container_width=True,
                                 ):
@@ -205,7 +253,7 @@ with tab_manage:
                                         st.error(e.detail)
 
                                 if st.button(
-                                    "❌ Reject",
+                                    "Reject",
                                     key=f"reject_transfer_{match_id}",
                                     use_container_width=True,
                                 ):
@@ -217,7 +265,19 @@ with tab_manage:
                                     except api_client.APIError as e:
                                         st.error(e.detail)
                             else:
-                                st.write(f"Status: **{current_status.upper()}**")
+                                st.markdown(
+                                    f"""
+                                    <div style="
+                                        background-color: {status_color}20;
+                                        color: {status_color};
+                                        padding: 0.5rem;
+                                        border-radius: 4px;
+                                        text-align: center;
+                                        font-weight: 600;
+                                    ">{current_status.upper()}</div>
+                                    """,
+                                    unsafe_allow_html=True,
+                                )
 
                 df = pd.DataFrame(matches)
                 display_cols = [
@@ -230,7 +290,8 @@ with tab_manage:
                 ]
                 available_cols = [c for c in display_cols if c in df.columns]
                 if available_cols:
-                    st.markdown("### All Matches Table")
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    section_header("All Matches Table")
                     st.dataframe(
                         df[available_cols], use_container_width=True, hide_index=True
                     )
@@ -239,7 +300,7 @@ with tab_manage:
 
             st.markdown("---")
             if session.get("status") != "closed" and st.button(
-                "🔒 Close Session", type="secondary"
+                "Close Session", type="secondary"
             ):
                 try:
                     api_client.close_transfer_session(session_id)

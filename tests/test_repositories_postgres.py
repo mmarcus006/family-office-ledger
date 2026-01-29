@@ -22,6 +22,10 @@ if not SKIP_POSTGRES:
         Position,
         Security,
     )
+    from family_office_ledger.domain.exchange_rates import (
+        ExchangeRate,
+        ExchangeRateSource,
+    )
     from family_office_ledger.domain.transactions import Entry, TaxLot, Transaction
     from family_office_ledger.domain.value_objects import (
         AccountSubType,
@@ -32,14 +36,17 @@ if not SKIP_POSTGRES:
         Money,
         Quantity,
     )
+    from family_office_ledger.domain.vendors import Vendor
     from family_office_ledger.repositories.postgres import (
         PostgresAccountRepository,
         PostgresDatabase,
         PostgresEntityRepository,
+        PostgresExchangeRateRepository,
         PostgresPositionRepository,
         PostgresSecurityRepository,
         PostgresTaxLotRepository,
         PostgresTransactionRepository,
+        PostgresVendorRepository,
     )
 
 
@@ -49,7 +56,6 @@ def db() -> "PostgresDatabase":
     assert POSTGRES_URL is not None
     database = PostgresDatabase(POSTGRES_URL)
     database.initialize()
-    # Clean up tables before test
     conn = database.get_connection()
     with conn.cursor() as cur:
         cur.execute("DELETE FROM entries")
@@ -59,6 +65,8 @@ def db() -> "PostgresDatabase":
         cur.execute("DELETE FROM securities")
         cur.execute("DELETE FROM accounts")
         cur.execute("DELETE FROM entities")
+        cur.execute("DELETE FROM exchange_rates")
+        cur.execute("DELETE FROM vendors")
     conn.commit()
     return database
 
@@ -91,6 +99,16 @@ def transaction_repo(db: "PostgresDatabase") -> "PostgresTransactionRepository":
 @pytest.fixture
 def tax_lot_repo(db: "PostgresDatabase") -> "PostgresTaxLotRepository":
     return PostgresTaxLotRepository(db)
+
+
+@pytest.fixture
+def exchange_rate_repo(db: "PostgresDatabase") -> "PostgresExchangeRateRepository":
+    return PostgresExchangeRateRepository(db)
+
+
+@pytest.fixture
+def vendor_repo(db: "PostgresDatabase") -> "PostgresVendorRepository":
+    return PostgresVendorRepository(db)
 
 
 # ===== Entity Repository Tests =====
@@ -1397,3 +1415,396 @@ class TestPostgresRepositoryIntegration:
         assert retrieved_txn is not None
         assert retrieved_txn.is_balanced
         assert len(retrieved_txn.entries) == 2
+
+
+# ===== Exchange Rate Repository Tests =====
+
+
+class TestPostgresExchangeRateRepository:
+    def test_add_and_get_exchange_rate(
+        self, exchange_rate_repo: "PostgresExchangeRateRepository"
+    ) -> None:
+        rate = ExchangeRate(
+            from_currency="USD",
+            to_currency="EUR",
+            rate=Decimal("0.85"),
+            effective_date=date(2024, 1, 15),
+            source=ExchangeRateSource.ECB,
+        )
+
+        exchange_rate_repo.add(rate)
+        retrieved = exchange_rate_repo.get(rate.id)
+
+        assert retrieved is not None
+        assert retrieved.id == rate.id
+        assert retrieved.from_currency == "USD"
+        assert retrieved.to_currency == "EUR"
+        assert retrieved.rate == Decimal("0.85")
+        assert retrieved.effective_date == date(2024, 1, 15)
+        assert retrieved.source == ExchangeRateSource.ECB
+
+    def test_get_nonexistent_rate_returns_none(
+        self, exchange_rate_repo: "PostgresExchangeRateRepository"
+    ) -> None:
+        result = exchange_rate_repo.get(uuid4())
+        assert result is None
+
+    def test_get_rate_by_pair_and_date(
+        self, exchange_rate_repo: "PostgresExchangeRateRepository"
+    ) -> None:
+        rate = ExchangeRate(
+            from_currency="USD",
+            to_currency="GBP",
+            rate=Decimal("0.79"),
+            effective_date=date(2024, 1, 15),
+        )
+        exchange_rate_repo.add(rate)
+
+        retrieved = exchange_rate_repo.get_rate("USD", "GBP", date(2024, 1, 15))
+
+        assert retrieved is not None
+        assert retrieved.rate == Decimal("0.79")
+
+    def test_get_rate_not_found(
+        self, exchange_rate_repo: "PostgresExchangeRateRepository"
+    ) -> None:
+        result = exchange_rate_repo.get_rate("USD", "JPY", date(2024, 1, 15))
+        assert result is None
+
+    def test_get_latest_rate(
+        self, exchange_rate_repo: "PostgresExchangeRateRepository"
+    ) -> None:
+        rate1 = ExchangeRate(
+            from_currency="USD",
+            to_currency="EUR",
+            rate=Decimal("0.84"),
+            effective_date=date(2024, 1, 10),
+        )
+        rate2 = ExchangeRate(
+            from_currency="USD",
+            to_currency="EUR",
+            rate=Decimal("0.85"),
+            effective_date=date(2024, 1, 15),
+        )
+        rate3 = ExchangeRate(
+            from_currency="USD",
+            to_currency="EUR",
+            rate=Decimal("0.86"),
+            effective_date=date(2024, 1, 20),
+        )
+        exchange_rate_repo.add(rate1)
+        exchange_rate_repo.add(rate2)
+        exchange_rate_repo.add(rate3)
+
+        latest = exchange_rate_repo.get_latest_rate("USD", "EUR")
+
+        assert latest is not None
+        assert latest.rate == Decimal("0.86")
+        assert latest.effective_date == date(2024, 1, 20)
+
+    def test_get_latest_rate_not_found(
+        self, exchange_rate_repo: "PostgresExchangeRateRepository"
+    ) -> None:
+        result = exchange_rate_repo.get_latest_rate("USD", "CHF")
+        assert result is None
+
+    def test_list_by_currency_pair(
+        self, exchange_rate_repo: "PostgresExchangeRateRepository"
+    ) -> None:
+        rate1 = ExchangeRate(
+            from_currency="USD",
+            to_currency="EUR",
+            rate=Decimal("0.84"),
+            effective_date=date(2024, 1, 10),
+        )
+        rate2 = ExchangeRate(
+            from_currency="USD",
+            to_currency="EUR",
+            rate=Decimal("0.85"),
+            effective_date=date(2024, 1, 15),
+        )
+        rate3 = ExchangeRate(
+            from_currency="USD",
+            to_currency="GBP",
+            rate=Decimal("0.79"),
+            effective_date=date(2024, 1, 15),
+        )
+        exchange_rate_repo.add(rate1)
+        exchange_rate_repo.add(rate2)
+        exchange_rate_repo.add(rate3)
+
+        rates = list(exchange_rate_repo.list_by_currency_pair("USD", "EUR"))
+
+        assert len(rates) == 2
+        assert rates[0].effective_date == date(2024, 1, 10)
+        assert rates[1].effective_date == date(2024, 1, 15)
+
+    def test_list_by_currency_pair_with_date_filter(
+        self, exchange_rate_repo: "PostgresExchangeRateRepository"
+    ) -> None:
+        rate1 = ExchangeRate(
+            from_currency="USD",
+            to_currency="EUR",
+            rate=Decimal("0.84"),
+            effective_date=date(2024, 1, 5),
+        )
+        rate2 = ExchangeRate(
+            from_currency="USD",
+            to_currency="EUR",
+            rate=Decimal("0.85"),
+            effective_date=date(2024, 1, 15),
+        )
+        rate3 = ExchangeRate(
+            from_currency="USD",
+            to_currency="EUR",
+            rate=Decimal("0.86"),
+            effective_date=date(2024, 1, 25),
+        )
+        exchange_rate_repo.add(rate1)
+        exchange_rate_repo.add(rate2)
+        exchange_rate_repo.add(rate3)
+
+        filtered = list(
+            exchange_rate_repo.list_by_currency_pair(
+                "USD",
+                "EUR",
+                start_date=date(2024, 1, 10),
+                end_date=date(2024, 1, 20),
+            )
+        )
+
+        assert len(filtered) == 1
+        assert filtered[0].rate == Decimal("0.85")
+
+    def test_list_by_date(
+        self, exchange_rate_repo: "PostgresExchangeRateRepository"
+    ) -> None:
+        rate1 = ExchangeRate(
+            from_currency="USD",
+            to_currency="EUR",
+            rate=Decimal("0.85"),
+            effective_date=date(2024, 1, 15),
+        )
+        rate2 = ExchangeRate(
+            from_currency="USD",
+            to_currency="GBP",
+            rate=Decimal("0.79"),
+            effective_date=date(2024, 1, 15),
+        )
+        rate3 = ExchangeRate(
+            from_currency="EUR",
+            to_currency="GBP",
+            rate=Decimal("0.93"),
+            effective_date=date(2024, 1, 16),
+        )
+        exchange_rate_repo.add(rate1)
+        exchange_rate_repo.add(rate2)
+        exchange_rate_repo.add(rate3)
+
+        rates = list(exchange_rate_repo.list_by_date(date(2024, 1, 15)))
+
+        assert len(rates) == 2
+        pairs = {(r.from_currency, r.to_currency) for r in rates}
+        assert ("USD", "EUR") in pairs
+        assert ("USD", "GBP") in pairs
+
+    def test_delete_exchange_rate(
+        self, exchange_rate_repo: "PostgresExchangeRateRepository"
+    ) -> None:
+        rate = ExchangeRate(
+            from_currency="USD",
+            to_currency="EUR",
+            rate=Decimal("0.85"),
+            effective_date=date(2024, 1, 15),
+        )
+        exchange_rate_repo.add(rate)
+
+        exchange_rate_repo.delete(rate.id)
+
+        assert exchange_rate_repo.get(rate.id) is None
+
+    def test_exchange_rate_preserves_timestamps(
+        self, exchange_rate_repo: "PostgresExchangeRateRepository"
+    ) -> None:
+        rate = ExchangeRate(
+            from_currency="USD",
+            to_currency="EUR",
+            rate=Decimal("0.85"),
+            effective_date=date(2024, 1, 15),
+        )
+        original_created = rate.created_at
+
+        exchange_rate_repo.add(rate)
+        retrieved = exchange_rate_repo.get(rate.id)
+
+        assert retrieved is not None
+        assert retrieved.created_at == original_created
+
+
+# ===== Vendor Repository Tests =====
+
+
+class TestPostgresVendorRepository:
+    def test_add_and_get_vendor(self, vendor_repo: "PostgresVendorRepository") -> None:
+        vendor = Vendor(
+            name="Acme Corp",
+            category="supplies",
+            tax_id="12-3456789",
+            is_1099_eligible=True,
+            contact_email="billing@acme.com",
+            contact_phone="555-1234",
+            notes="Preferred vendor",
+        )
+
+        vendor_repo.add(vendor)
+        retrieved = vendor_repo.get(vendor.id)
+
+        assert retrieved is not None
+        assert retrieved.id == vendor.id
+        assert retrieved.name == "Acme Corp"
+        assert retrieved.category == "supplies"
+        assert retrieved.tax_id == "12-3456789"
+        assert retrieved.is_1099_eligible is True
+        assert retrieved.contact_email == "billing@acme.com"
+        assert retrieved.contact_phone == "555-1234"
+        assert retrieved.notes == "Preferred vendor"
+        assert retrieved.is_active is True
+
+    def test_get_nonexistent_vendor_returns_none(
+        self, vendor_repo: "PostgresVendorRepository"
+    ) -> None:
+        result = vendor_repo.get(uuid4())
+        assert result is None
+
+    def test_update_vendor(self, vendor_repo: "PostgresVendorRepository") -> None:
+        vendor = Vendor(name="Old Name", category="misc")
+        vendor_repo.add(vendor)
+
+        vendor.name = "New Name"
+        vendor.category = "services"
+        vendor.is_1099_eligible = True
+        vendor_repo.update(vendor)
+
+        retrieved = vendor_repo.get(vendor.id)
+        assert retrieved is not None
+        assert retrieved.name == "New Name"
+        assert retrieved.category == "services"
+        assert retrieved.is_1099_eligible is True
+
+    def test_delete_vendor(self, vendor_repo: "PostgresVendorRepository") -> None:
+        vendor = Vendor(name="To Delete")
+        vendor_repo.add(vendor)
+
+        vendor_repo.delete(vendor.id)
+
+        assert vendor_repo.get(vendor.id) is None
+
+    def test_list_all_active_only(
+        self, vendor_repo: "PostgresVendorRepository"
+    ) -> None:
+        active = Vendor(name="Active Vendor")
+        inactive = Vendor(name="Inactive Vendor", is_active=False)
+        vendor_repo.add(active)
+        vendor_repo.add(inactive)
+
+        vendors = list(vendor_repo.list_all(include_inactive=False))
+
+        assert len(vendors) == 1
+        assert vendors[0].name == "Active Vendor"
+
+    def test_list_all_including_inactive(
+        self, vendor_repo: "PostgresVendorRepository"
+    ) -> None:
+        active = Vendor(name="Active Vendor")
+        inactive = Vendor(name="Inactive Vendor", is_active=False)
+        vendor_repo.add(active)
+        vendor_repo.add(inactive)
+
+        vendors = list(vendor_repo.list_all(include_inactive=True))
+
+        assert len(vendors) == 2
+
+    def test_list_by_category(self, vendor_repo: "PostgresVendorRepository") -> None:
+        v1 = Vendor(name="Vendor A", category="supplies")
+        v2 = Vendor(name="Vendor B", category="services")
+        v3 = Vendor(name="Vendor C", category="supplies")
+        vendor_repo.add(v1)
+        vendor_repo.add(v2)
+        vendor_repo.add(v3)
+
+        vendors = list(vendor_repo.list_by_category("supplies"))
+
+        assert len(vendors) == 2
+        names = {v.name for v in vendors}
+        assert names == {"Vendor A", "Vendor C"}
+
+    def test_search_by_name(self, vendor_repo: "PostgresVendorRepository") -> None:
+        v1 = Vendor(name="Acme Corporation")
+        v2 = Vendor(name="Beta Inc")
+        v3 = Vendor(name="Acme Supply Co")
+        vendor_repo.add(v1)
+        vendor_repo.add(v2)
+        vendor_repo.add(v3)
+
+        vendors = list(vendor_repo.search_by_name("Acme"))
+
+        assert len(vendors) == 2
+        names = {v.name for v in vendors}
+        assert names == {"Acme Corporation", "Acme Supply Co"}
+
+    def test_get_by_tax_id(self, vendor_repo: "PostgresVendorRepository") -> None:
+        vendor = Vendor(name="Tax Vendor", tax_id="98-7654321")
+        vendor_repo.add(vendor)
+
+        retrieved = vendor_repo.get_by_tax_id("98-7654321")
+
+        assert retrieved is not None
+        assert retrieved.name == "Tax Vendor"
+
+    def test_get_by_tax_id_not_found(
+        self, vendor_repo: "PostgresVendorRepository"
+    ) -> None:
+        result = vendor_repo.get_by_tax_id("00-0000000")
+        assert result is None
+
+    def test_vendor_preserves_timestamps(
+        self, vendor_repo: "PostgresVendorRepository"
+    ) -> None:
+        vendor = Vendor(name="Timestamp Test")
+        original_created = vendor.created_at
+        original_updated = vendor.updated_at
+
+        vendor_repo.add(vendor)
+        retrieved = vendor_repo.get(vendor.id)
+
+        assert retrieved is not None
+        assert retrieved.created_at == original_created
+        assert retrieved.updated_at == original_updated
+
+    def test_vendor_with_default_account(
+        self,
+        vendor_repo: "PostgresVendorRepository",
+        entity_repo: "PostgresEntityRepository",
+        account_repo: "PostgresAccountRepository",
+    ) -> None:
+        entity = Entity(name="Test Entity", entity_type=EntityType.TRUST)
+        entity_repo.add(entity)
+
+        account = Account(
+            name="Expense Account",
+            entity_id=entity.id,
+            account_type=AccountType.EXPENSE,
+        )
+        account_repo.add(account)
+
+        vendor = Vendor(
+            name="Vendor with Default",
+            default_account_id=account.id,
+            default_category="utilities",
+        )
+        vendor_repo.add(vendor)
+
+        retrieved = vendor_repo.get(vendor.id)
+        assert retrieved is not None
+        assert retrieved.default_account_id == account.id
+        assert retrieved.default_category == "utilities"

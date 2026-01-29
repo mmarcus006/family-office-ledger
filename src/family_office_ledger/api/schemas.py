@@ -72,7 +72,9 @@ class EntryCreate(BaseModel):
 
     account_id: UUID
     debit_amount: str = Field(default="0")
+    debit_currency: str = Field(default="USD", min_length=3, max_length=3)
     credit_amount: str = Field(default="0")
+    credit_currency: str = Field(default="USD", min_length=3, max_length=3)
     memo: str = ""
 
 
@@ -84,7 +86,9 @@ class EntryResponse(BaseModel):
     id: UUID
     account_id: UUID
     debit_amount: str
+    debit_currency: str
     credit_amount: str
+    credit_currency: str
     memo: str
 
 
@@ -291,3 +295,228 @@ class QSBSSummaryResponse(BaseModel):
     total_cost_basis: str
     total_potential_exclusion: str
     holdings: list[QSBSHoldingResponse]
+
+
+# Tax Document Schemas
+class Form8949EntryResponse(BaseModel):
+    description: str
+    date_acquired: date
+    date_sold: date
+    proceeds: str
+    cost_basis: str
+    adjustment_code: str | None
+    adjustment_amount: str | None
+    gain_or_loss: str
+    is_long_term: bool
+    box: str
+
+
+class Form8949PartResponse(BaseModel):
+    box: str
+    entries: list[Form8949EntryResponse]
+    total_proceeds: str
+    total_cost_basis: str
+    total_adjustments: str
+    total_gain_or_loss: str
+
+
+class Form8949Response(BaseModel):
+    tax_year: int
+    taxpayer_name: str
+    short_term_parts: list[Form8949PartResponse]
+    long_term_parts: list[Form8949PartResponse]
+    total_short_term_proceeds: str
+    total_short_term_cost_basis: str
+    total_short_term_gain_or_loss: str
+    total_long_term_proceeds: str
+    total_long_term_cost_basis: str
+    total_long_term_gain_or_loss: str
+
+
+class ScheduleDResponse(BaseModel):
+    tax_year: int
+    taxpayer_name: str
+    line_1a_box_a: str
+    line_1b_box_b: str
+    line_1c_box_c: str
+    line_7_net_short_term: str
+    line_8a_box_d: str
+    line_8b_box_e: str
+    line_8c_box_f: str
+    line_15_net_long_term: str
+    line_16_combined: str
+
+
+class TaxDocumentSummaryResponse(BaseModel):
+    tax_year: int
+    entity_name: str
+    short_term_transactions: int
+    long_term_transactions: int
+    total_short_term_proceeds: str
+    total_short_term_cost_basis: str
+    total_short_term_gain: str
+    total_long_term_proceeds: str
+    total_long_term_cost_basis: str
+    total_long_term_gain: str
+    wash_sale_adjustments: str
+    net_capital_gain: str
+
+
+class TaxDocumentsResponse(BaseModel):
+    form_8949: Form8949Response
+    schedule_d: ScheduleDResponse
+    summary: TaxDocumentSummaryResponse
+
+
+class GenerateTaxDocumentsRequest(BaseModel):
+    tax_year: int = Field(..., ge=2000, le=2100)
+    lot_proceeds: dict[str, str] | None = None
+
+
+# Portfolio Analytics Schemas
+class AssetAllocationResponse(BaseModel):
+    asset_class: str
+    market_value: str
+    cost_basis: str
+    unrealized_gain: str
+    allocation_percent: str
+    position_count: int
+
+
+class AssetAllocationReportResponse(BaseModel):
+    as_of_date: date
+    entity_names: list[str]
+    allocations: list[AssetAllocationResponse]
+    total_market_value: str
+    total_cost_basis: str
+    total_unrealized_gain: str
+
+
+class HoldingConcentrationResponse(BaseModel):
+    security_id: UUID
+    security_symbol: str
+    security_name: str
+    asset_class: str
+    market_value: str
+    cost_basis: str
+    unrealized_gain: str
+    concentration_percent: str
+    position_count: int
+
+
+class ConcentrationReportResponse(BaseModel):
+    as_of_date: date
+    entity_names: list[str]
+    holdings: list[HoldingConcentrationResponse]
+    total_market_value: str
+    top_5_concentration: str
+    top_10_concentration: str
+    largest_single_holding: str
+
+
+class PerformanceMetricsResponse(BaseModel):
+    entity_name: str
+    start_value: str
+    end_value: str
+    net_contributions: str
+    total_return_amount: str
+    total_return_percent: str
+    unrealized_gain: str
+    unrealized_gain_percent: str
+
+
+class PerformanceReportResponse(BaseModel):
+    start_date: date
+    end_date: date
+    entity_names: list[str]
+    metrics: list[PerformanceMetricsResponse]
+    portfolio_total_return_amount: str
+    portfolio_total_return_percent: str
+
+
+class PortfolioSummaryResponse(BaseModel):
+    as_of_date: date
+    total_market_value: str
+    total_cost_basis: str
+    total_unrealized_gain: str
+    asset_allocation: list[dict[str, Any]]
+    top_holdings: list[dict[str, Any]]
+    concentration_metrics: dict[str, str]
+
+
+# Audit Trail Schemas
+class AuditEntryResponse(BaseModel):
+    id: UUID
+    entity_type: str
+    entity_id: UUID
+    action: str
+    user_id: UUID | None
+    timestamp: datetime
+    old_values: dict[str, Any] | None
+    new_values: dict[str, Any] | None
+    change_summary: str
+    ip_address: str | None
+    user_agent: str | None
+
+
+class AuditListResponse(BaseModel):
+    entries: list[AuditEntryResponse]
+    total: int
+
+
+class AuditSummaryResponse(BaseModel):
+    total_entries: int
+    entries_by_action: dict[str, int]
+    entries_by_entity_type: dict[str, int]
+    oldest_entry: datetime | None
+    newest_entry: datetime | None
+
+
+# Exchange Rate Schemas
+class ExchangeRateCreate(BaseModel):
+    """Schema for creating an exchange rate."""
+
+    from_currency: str = Field(..., min_length=3, max_length=3)
+    to_currency: str = Field(..., min_length=3, max_length=3)
+    rate: str  # Decimal as string
+    effective_date: date
+    source: str = Field(default="manual")
+
+
+class ExchangeRateResponse(BaseModel):
+    """Schema for exchange rate response."""
+
+    id: UUID
+    from_currency: str
+    to_currency: str
+    rate: str
+    effective_date: date
+    source: str
+    created_at: datetime
+
+
+class ExchangeRateListResponse(BaseModel):
+    """Schema for paginated exchange rate list response."""
+
+    rates: list[ExchangeRateResponse]
+    total: int
+
+
+class CurrencyConvertRequest(BaseModel):
+    """Schema for currency conversion request."""
+
+    amount: str
+    from_currency: str = Field(..., min_length=3, max_length=3)
+    to_currency: str = Field(..., min_length=3, max_length=3)
+    as_of_date: date
+
+
+class CurrencyConvertResponse(BaseModel):
+    """Schema for currency conversion response."""
+
+    original_amount: str
+    original_currency: str
+    converted_amount: str
+    converted_currency: str
+    rate_used: str
+    as_of_date: date

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 import streamlit as st
 
 from family_office_ledger.streamlit_app import api_client
 from family_office_ledger.streamlit_app.app import init_session_state
+from family_office_ledger.streamlit_app.styles import apply_custom_css, section_header
 
 init_session_state()
+apply_custom_css()
 
 ACCOUNT_TYPES = ["asset", "liability", "equity", "income", "expense"]
 ACCOUNT_SUB_TYPES = [
@@ -29,13 +33,28 @@ ACCOUNT_SUB_TYPES = [
     "other",
 ]
 
-st.title("💰 Accounts")
+st.title("Accounts")
 
-entities = []
-try:
-    entities = api_client.list_entities()
-except Exception:
-    pass
+
+@st.cache_data(ttl=30)
+def get_entities() -> list[dict[str, Any]]:
+    """Fetch entities with caching."""
+    try:
+        return api_client.list_entities()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=30)
+def get_accounts(entity_id: str | None = None) -> list[dict[str, Any]]:
+    """Fetch accounts with caching."""
+    try:
+        return api_client.list_accounts(entity_id=entity_id)
+    except Exception:
+        return []
+
+
+entities = get_entities()
 
 if not entities:
     st.warning("No entities found. Create an entity first on the Entities page.")
@@ -63,14 +82,14 @@ tab_list, tab_create = st.tabs(["All Accounts", "Create New"])
 
 with tab_list:
     try:
-        accounts = api_client.list_accounts(entity_id=selected_entity)
+        accounts = get_accounts(entity_id=selected_entity)
         if accounts:
             for acct_type in ACCOUNT_TYPES:
                 type_accounts = [
                     a for a in accounts if a.get("account_type") == acct_type
                 ]
                 if type_accounts:
-                    st.subheader(acct_type.title())
+                    section_header(acct_type.title())
                     df = pd.DataFrame(type_accounts)
                     display_cols = ["name", "sub_type", "currency", "id"]
                     available_cols = [c for c in display_cols if c in df.columns]
@@ -79,6 +98,7 @@ with tab_list:
                         use_container_width=True,
                         hide_index=True,
                     )
+                    st.markdown("<br>", unsafe_allow_html=True)
         else:
             st.info(
                 "No accounts found for this entity. Create one in the 'Create New' tab."
@@ -89,7 +109,7 @@ with tab_list:
         st.error(f"Error loading accounts: {e}")
 
 with tab_create:
-    st.subheader("Create New Account")
+    section_header("Create New Account")
 
     with st.form("create_account_form"):
         name = st.text_input("Account Name", placeholder="e.g., Operating Checking")
@@ -121,7 +141,8 @@ with tab_create:
                         sub_type=sub_type,
                         currency=currency.upper(),
                     )
-                    st.success(f"✅ Created account: {result.get('name')}")
+                    st.success(f"Created account: {result.get('name')}")
+                    get_accounts.clear()
                     st.rerun()
                 except api_client.APIError as e:
                     st.error(f"Failed to create account: {e.detail}")

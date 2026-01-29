@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -12,6 +13,7 @@ import psycopg2
 import psycopg2.extras
 
 from family_office_ledger.domain.entities import Account, Entity, Position, Security
+from family_office_ledger.domain.exchange_rates import ExchangeRate, ExchangeRateSource
 from family_office_ledger.domain.reconciliation import (
     ReconciliationMatch,
     ReconciliationMatchStatus,
@@ -28,14 +30,17 @@ from family_office_ledger.domain.value_objects import (
     Money,
     Quantity,
 )
+from family_office_ledger.domain.vendors import Vendor
 from family_office_ledger.repositories.interfaces import (
     AccountRepository,
     EntityRepository,
+    ExchangeRateRepository,
     PositionRepository,
     ReconciliationSessionRepository,
     SecurityRepository,
     TaxLotRepository,
     TransactionRepository,
+    VendorRepository,
 )
 
 
@@ -193,6 +198,34 @@ class PostgresDatabase:
                     FOREIGN KEY (session_id) REFERENCES reconciliation_sessions(id) ON DELETE CASCADE
                 );
 
+                -- Exchange rates table
+                CREATE TABLE IF NOT EXISTS exchange_rates (
+                    id TEXT PRIMARY KEY,
+                    from_currency TEXT NOT NULL,
+                    to_currency TEXT NOT NULL,
+                    rate TEXT NOT NULL,
+                    effective_date TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                -- Vendors table
+                CREATE TABLE IF NOT EXISTS vendors (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    category TEXT,
+                    tax_id TEXT,
+                    is_1099_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+                    default_account_id TEXT,
+                    default_category TEXT,
+                    contact_email TEXT,
+                    contact_phone TEXT,
+                    notes TEXT DEFAULT '',
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 -- Indexes for common queries
                 CREATE INDEX IF NOT EXISTS idx_accounts_entity_id ON accounts(entity_id);
                 CREATE INDEX IF NOT EXISTS idx_positions_account_id ON positions(account_id);
@@ -204,6 +237,25 @@ class PostgresDatabase:
                 CREATE INDEX IF NOT EXISTS idx_tax_lots_acquisition_date ON tax_lots(acquisition_date);
                 CREATE INDEX IF NOT EXISTS idx_reconciliation_sessions_account_id ON reconciliation_sessions(account_id);
                 CREATE INDEX IF NOT EXISTS idx_reconciliation_matches_session_id ON reconciliation_matches(session_id);
+                CREATE INDEX IF NOT EXISTS idx_exchange_rates_pair_date ON exchange_rates(from_currency, to_currency, effective_date);
+                CREATE INDEX IF NOT EXISTS idx_exchange_rates_date ON exchange_rates(effective_date);
+                CREATE INDEX IF NOT EXISTS idx_vendors_name ON vendors(name);
+                CREATE INDEX IF NOT EXISTS idx_vendors_category ON vendors(category);
+                CREATE INDEX IF NOT EXISTS idx_vendors_tax_id ON vendors(tax_id);
+                """
+            )
+
+            # Add expense columns to transactions and entries tables
+            # Postgres supports ADD COLUMN IF NOT EXISTS
+            cur.execute(
+                """
+                ALTER TABLE transactions ADD COLUMN IF NOT EXISTS category TEXT;
+                ALTER TABLE transactions ADD COLUMN IF NOT EXISTS tags TEXT;
+                ALTER TABLE transactions ADD COLUMN IF NOT EXISTS vendor_id TEXT;
+                ALTER TABLE transactions ADD COLUMN IF NOT EXISTS is_recurring BOOLEAN DEFAULT FALSE;
+                ALTER TABLE transactions ADD COLUMN IF NOT EXISTS recurring_frequency TEXT;
+
+                ALTER TABLE entries ADD COLUMN IF NOT EXISTS category TEXT;
                 """
             )
         conn.commit()
@@ -713,12 +765,12 @@ class PostgresTransactionRepository(TransactionRepository):
     def add(self, txn: Transaction) -> None:
         conn = self._db.get_connection()
         with conn.cursor() as cur:
-            # Insert transaction
             cur.execute(
                 """
                 INSERT INTO transactions (id, transaction_date, posted_date, memo, reference,
-                                          created_by, created_at, is_reversed, reverses_transaction_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                          created_by, created_at, is_reversed, reverses_transaction_id,
+                                          category, tags, vendor_id, is_recurring, recurring_frequency)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     str(txn.id),
@@ -732,15 +784,19 @@ class PostgresTransactionRepository(TransactionRepository):
                     str(txn.reverses_transaction_id)
                     if txn.reverses_transaction_id
                     else None,
+                    txn.category,
+                    json.dumps(txn.tags) if txn.tags else None,
+                    str(txn.vendor_id) if txn.vendor_id else None,
+                    txn.is_recurring,
+                    txn.recurring_frequency,
                 ),
             )
-            # Insert entries
             for entry in txn.entries:
                 cur.execute(
                     """
                     INSERT INTO entries (id, transaction_id, account_id, debit_amount, debit_currency,
-                                         credit_amount, credit_currency, memo, tax_lot_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                         credit_amount, credit_currency, memo, tax_lot_id, category)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         str(entry.id),
@@ -752,6 +808,7 @@ class PostgresTransactionRepository(TransactionRepository):
                         entry.credit_amount.currency,
                         entry.memo,
                         str(entry.tax_lot_id) if entry.tax_lot_id else None,
+                        entry.category,
                     ),
                 )
         conn.commit()
@@ -858,7 +915,12 @@ class PostgresTransactionRepository(TransactionRepository):
                     reference = %s,
                     created_by = %s,
                     is_reversed = %s,
-                    reverses_transaction_id = %s
+                    reverses_transaction_id = %s,
+                    category = %s,
+                    tags = %s,
+                    vendor_id = %s,
+                    is_recurring = %s,
+                    recurring_frequency = %s
                 WHERE id = %s
                 """,
                 (
@@ -871,6 +933,11 @@ class PostgresTransactionRepository(TransactionRepository):
                     str(txn.reverses_transaction_id)
                     if txn.reverses_transaction_id
                     else None,
+                    txn.category,
+                    json.dumps(txn.tags) if txn.tags else None,
+                    str(txn.vendor_id) if txn.vendor_id else None,
+                    txn.is_recurring,
+                    txn.recurring_frequency,
                     str(txn.id),
                 ),
             )
@@ -878,11 +945,13 @@ class PostgresTransactionRepository(TransactionRepository):
 
     def _row_to_transaction(self, row: Any) -> Transaction:
         conn = self._db.get_connection()
-        # Get entries for this transaction
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM entries WHERE transaction_id = %s", (row["id"],))
             entry_rows = cur.fetchall()
         entries = [self._row_to_entry(entry_row) for entry_row in entry_rows]
+
+        tags_raw = row.get("tags")
+        tags: list[str] = json.loads(tags_raw) if tags_raw else []
 
         txn = Transaction(
             transaction_date=date.fromisoformat(row["transaction_date"]),
@@ -898,8 +967,12 @@ class PostgresTransactionRepository(TransactionRepository):
             reverses_transaction_id=UUID(row["reverses_transaction_id"])
             if row["reverses_transaction_id"]
             else None,
+            category=row.get("category"),
+            tags=tags,
+            vendor_id=UUID(row["vendor_id"]) if row.get("vendor_id") else None,
+            is_recurring=bool(row.get("is_recurring", False)),
+            recurring_frequency=row.get("recurring_frequency"),
         )
-        # Set created_at directly
         object.__setattr__(txn, "created_at", datetime.fromisoformat(row["created_at"]))
         return txn
 
@@ -911,6 +984,7 @@ class PostgresTransactionRepository(TransactionRepository):
             credit_amount=Money(Decimal(row["credit_amount"]), row["credit_currency"]),
             memo=row["memo"],
             tax_lot_id=UUID(row["tax_lot_id"]) if row["tax_lot_id"] else None,
+            category=row.get("category"),
         )
 
 
@@ -1283,3 +1357,294 @@ class PostgresReconciliationSessionRepository(ReconciliationSessionRepository):
             match, "created_at", datetime.fromisoformat(row["created_at"])
         )
         return match
+
+
+class PostgresExchangeRateRepository(ExchangeRateRepository):
+    """PostgreSQL implementation of ExchangeRateRepository."""
+
+    def __init__(self, database: PostgresDatabase) -> None:
+        self._db = database
+
+    def add(self, rate: ExchangeRate) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO exchange_rates (id, from_currency, to_currency, rate,
+                                            effective_date, source, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(rate.id),
+                    rate.from_currency,
+                    rate.to_currency,
+                    str(rate.rate),
+                    rate.effective_date.isoformat(),
+                    rate.source.value,
+                    rate.created_at.isoformat(),
+                ),
+            )
+        conn.commit()
+
+    def get(self, rate_id: UUID) -> ExchangeRate | None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM exchange_rates WHERE id = %s", (str(rate_id),))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_exchange_rate(row)
+
+    def get_rate(
+        self,
+        from_currency: str,
+        to_currency: str,
+        effective_date: date,
+    ) -> ExchangeRate | None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM exchange_rates
+                WHERE from_currency = %s AND to_currency = %s AND effective_date = %s
+                """,
+                (from_currency, to_currency, effective_date.isoformat()),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_exchange_rate(row)
+
+    def get_latest_rate(
+        self,
+        from_currency: str,
+        to_currency: str,
+    ) -> ExchangeRate | None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM exchange_rates
+                WHERE from_currency = %s AND to_currency = %s
+                ORDER BY effective_date DESC
+                LIMIT 1
+                """,
+                (from_currency, to_currency),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_exchange_rate(row)
+
+    def list_by_currency_pair(
+        self,
+        from_currency: str,
+        to_currency: str,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> Iterable[ExchangeRate]:
+        conn = self._db.get_connection()
+        query = """
+            SELECT * FROM exchange_rates
+            WHERE from_currency = %s AND to_currency = %s
+        """
+        params: list[str] = [from_currency, to_currency]
+
+        if start_date is not None:
+            query += " AND effective_date >= %s"
+            params.append(start_date.isoformat())
+        if end_date is not None:
+            query += " AND effective_date <= %s"
+            params.append(end_date.isoformat())
+
+        query += " ORDER BY effective_date"
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+        return [self._row_to_exchange_rate(row) for row in rows]
+
+    def list_by_date(self, effective_date: date) -> Iterable[ExchangeRate]:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM exchange_rates WHERE effective_date = %s",
+                (effective_date.isoformat(),),
+            )
+            rows = cur.fetchall()
+        return [self._row_to_exchange_rate(row) for row in rows]
+
+    def delete(self, rate_id: UUID) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM exchange_rates WHERE id = %s", (str(rate_id),))
+        conn.commit()
+
+    def _row_to_exchange_rate(self, row: Any) -> ExchangeRate:
+        rate = ExchangeRate(
+            from_currency=row["from_currency"],
+            to_currency=row["to_currency"],
+            rate=Decimal(row["rate"]),
+            effective_date=date.fromisoformat(row["effective_date"]),
+            id=UUID(row["id"]),
+            source=ExchangeRateSource(row["source"]),
+        )
+        # Set created_at directly to preserve stored value
+        object.__setattr__(
+            rate, "created_at", datetime.fromisoformat(row["created_at"])
+        )
+        return rate
+
+
+class PostgresVendorRepository(VendorRepository):
+    """PostgreSQL implementation of VendorRepository."""
+
+    def __init__(self, database: PostgresDatabase) -> None:
+        self._db = database
+
+    def add(self, vendor: Vendor) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO vendors (id, name, category, tax_id, is_1099_eligible,
+                                     default_account_id, default_category, contact_email,
+                                     contact_phone, notes, is_active, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(vendor.id),
+                    vendor.name,
+                    vendor.category,
+                    vendor.tax_id,
+                    vendor.is_1099_eligible,
+                    str(vendor.default_account_id)
+                    if vendor.default_account_id
+                    else None,
+                    vendor.default_category,
+                    vendor.contact_email,
+                    vendor.contact_phone,
+                    vendor.notes,
+                    vendor.is_active,
+                    vendor.created_at.isoformat(),
+                    vendor.updated_at.isoformat(),
+                ),
+            )
+        conn.commit()
+
+    def get(self, vendor_id: UUID) -> Vendor | None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM vendors WHERE id = %s", (str(vendor_id),))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_vendor(row)
+
+    def update(self, vendor: Vendor) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE vendors SET
+                    name = %s,
+                    category = %s,
+                    tax_id = %s,
+                    is_1099_eligible = %s,
+                    default_account_id = %s,
+                    default_category = %s,
+                    contact_email = %s,
+                    contact_phone = %s,
+                    notes = %s,
+                    is_active = %s,
+                    updated_at = %s
+                WHERE id = %s
+                """,
+                (
+                    vendor.name,
+                    vendor.category,
+                    vendor.tax_id,
+                    vendor.is_1099_eligible,
+                    str(vendor.default_account_id)
+                    if vendor.default_account_id
+                    else None,
+                    vendor.default_category,
+                    vendor.contact_email,
+                    vendor.contact_phone,
+                    vendor.notes,
+                    vendor.is_active,
+                    vendor.updated_at.isoformat(),
+                    str(vendor.id),
+                ),
+            )
+        conn.commit()
+
+    def delete(self, vendor_id: UUID) -> None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM vendors WHERE id = %s", (str(vendor_id),))
+        conn.commit()
+
+    def list_all(self, include_inactive: bool = False) -> Iterable[Vendor]:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            if include_inactive:
+                cur.execute("SELECT * FROM vendors ORDER BY name")
+            else:
+                cur.execute(
+                    "SELECT * FROM vendors WHERE is_active = TRUE ORDER BY name"
+                )
+            rows = cur.fetchall()
+        return [self._row_to_vendor(row) for row in rows]
+
+    def list_by_category(self, category: str) -> Iterable[Vendor]:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM vendors WHERE category = %s AND is_active = TRUE ORDER BY name",
+                (category,),
+            )
+            rows = cur.fetchall()
+        return [self._row_to_vendor(row) for row in rows]
+
+    def search_by_name(self, name_pattern: str) -> Iterable[Vendor]:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM vendors WHERE name ILIKE %s AND is_active = TRUE ORDER BY name",
+                (f"%{name_pattern}%",),
+            )
+            rows = cur.fetchall()
+        return [self._row_to_vendor(row) for row in rows]
+
+    def get_by_tax_id(self, tax_id: str) -> Vendor | None:
+        conn = self._db.get_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM vendors WHERE tax_id = %s", (tax_id,))
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return self._row_to_vendor(row)
+
+    def _row_to_vendor(self, row: Any) -> Vendor:
+        vendor = Vendor(
+            name=row["name"],
+            id=UUID(row["id"]),
+            category=row["category"],
+            tax_id=row["tax_id"],
+            is_1099_eligible=bool(row["is_1099_eligible"]),
+            default_account_id=UUID(row["default_account_id"])
+            if row["default_account_id"]
+            else None,
+            default_category=row["default_category"],
+            contact_email=row["contact_email"],
+            contact_phone=row["contact_phone"],
+            notes=row["notes"] or "",
+            is_active=bool(row["is_active"]),
+        )
+        object.__setattr__(
+            vendor, "created_at", datetime.fromisoformat(row["created_at"])
+        )
+        object.__setattr__(
+            vendor, "updated_at", datetime.fromisoformat(row["updated_at"])
+        )
+        return vendor

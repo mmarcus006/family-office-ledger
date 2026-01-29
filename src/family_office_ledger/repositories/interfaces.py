@@ -4,8 +4,10 @@ from datetime import date
 from uuid import UUID
 
 from family_office_ledger.domain.entities import Account, Entity, Position, Security
+from family_office_ledger.domain.exchange_rates import ExchangeRate
 from family_office_ledger.domain.reconciliation import ReconciliationSession
 from family_office_ledger.domain.transactions import TaxLot, Transaction
+from family_office_ledger.domain.vendors import Vendor
 
 
 class EntityRepository(ABC):
@@ -243,4 +245,102 @@ class ReconciliationSessionRepository(ABC):
     @abstractmethod
     def list_by_account(self, account_id: UUID) -> Iterable[ReconciliationSession]:
         """List all sessions for an account."""
+        pass
+
+
+class ExchangeRateRepository(ABC):
+    """Repository interface for exchange rates."""
+
+    @abstractmethod
+    def add(self, rate: ExchangeRate) -> None:
+        """Add a new exchange rate."""
+        pass
+
+    @abstractmethod
+    def get(self, rate_id: UUID) -> ExchangeRate | None:
+        """Get exchange rate by ID."""
+        pass
+
+    @abstractmethod
+    def get_rate(
+        self,
+        from_currency: str,
+        to_currency: str,
+        effective_date: date,
+    ) -> ExchangeRate | None:
+        """Get exchange rate for currency pair on specific date."""
+        pass
+
+    @abstractmethod
+    def get_latest_rate(
+        self,
+        from_currency: str,
+        to_currency: str,
+    ) -> ExchangeRate | None:
+        """Get most recent exchange rate for currency pair."""
+        pass
+
+    @abstractmethod
+    def list_by_currency_pair(
+        self,
+        from_currency: str,
+        to_currency: str,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> Iterable[ExchangeRate]:
+        """List exchange rates for currency pair within date range."""
+        pass
+
+    @abstractmethod
+    def list_by_date(self, effective_date: date) -> Iterable[ExchangeRate]:
+        """List all exchange rates for a specific date."""
+        pass
+
+    @abstractmethod
+    def delete(self, rate_id: UUID) -> None:
+        """Delete an exchange rate."""
+        pass
+
+
+class VendorRepository(ABC):
+    """Repository interface for vendors/payees."""
+
+    @abstractmethod
+    def add(self, vendor: Vendor) -> None:
+        """Add a new vendor."""
+        pass
+
+    @abstractmethod
+    def get(self, vendor_id: UUID) -> Vendor | None:
+        """Get vendor by ID."""
+        pass
+
+    @abstractmethod
+    def update(self, vendor: Vendor) -> None:
+        """Update an existing vendor."""
+        pass
+
+    @abstractmethod
+    def delete(self, vendor_id: UUID) -> None:
+        """Delete a vendor."""
+        pass
+
+    @abstractmethod
+    def list_all(self, include_inactive: bool = False) -> Iterable[Vendor]:
+        """List all vendors, optionally including inactive ones."""
+        pass
+
+    @abstractmethod
+    def list_by_category(self, category: str) -> Iterable[Vendor]:
+        """List vendors by category."""
+        pass
+
+    @abstractmethod
+    def search_by_name(self, name_pattern: str) -> Iterable[Vendor]:
+        """Search vendors by name pattern."""
+        pass
+
+    @abstractmethod
+    def get_by_tax_id(self, tax_id: str) -> Vendor | None:
+        """Get vendor by tax ID."""
         pass

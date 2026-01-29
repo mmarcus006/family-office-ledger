@@ -3,25 +3,40 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 import pandas as pd
 import streamlit as st
 
 from family_office_ledger.streamlit_app import api_client
 from family_office_ledger.streamlit_app.app import init_session_state
+from family_office_ledger.streamlit_app.styles import apply_custom_css, section_header
 
 init_session_state()
+apply_custom_css()
 
 ENTITY_TYPES = ["llc", "trust", "partnership", "individual", "holding_co"]
 
-st.title("🏢 Entities")
+st.title("Entities")
+
+
+@st.cache_data(ttl=30)
+def get_entities() -> list[dict[str, Any]]:
+    """Fetch entities with caching."""
+    try:
+        return api_client.list_entities()
+    except Exception:
+        return []
+
 
 tab_list, tab_create = st.tabs(["All Entities", "Create New"])
 
 with tab_list:
     try:
-        entities = api_client.list_entities()
+        entities = get_entities()
         if entities:
+            section_header("Entity List")
+
             df = pd.DataFrame(entities)
             display_cols = ["name", "entity_type", "fiscal_year_end", "is_active", "id"]
             available_cols = [c for c in display_cols if c in df.columns]
@@ -31,8 +46,10 @@ with tab_list:
                 hide_index=True,
             )
 
-            st.markdown("---")
-            st.subheader("Select Entity for Other Pages")
+            st.markdown("<br>", unsafe_allow_html=True)
+            section_header("Select Active Entity")
+            st.caption("Selected entity will be used as default on other pages")
+
             entity_options = {str(e["id"]): e["name"] for e in entities}
             entity_options[""] = "-- Select Entity --"
 
@@ -50,6 +67,7 @@ with tab_list:
                     if str(current) in entity_options
                     else 0
                 ),
+                label_visibility="collapsed",
             )
             if selected != st.session_state.get("selected_entity_id"):
                 st.session_state.selected_entity_id = selected if selected else None
@@ -62,7 +80,7 @@ with tab_list:
         st.error(f"Error loading entities: {e}")
 
 with tab_create:
-    st.subheader("Create New Entity")
+    section_header("Create New Entity")
 
     with st.form("create_entity_form"):
         name = st.text_input("Entity Name", placeholder="e.g., Miller Family LLC")
@@ -88,7 +106,8 @@ with tab_create:
                         entity_type=entity_type,
                         fiscal_year_end=fiscal_year_end,
                     )
-                    st.success(f"✅ Created entity: {result.get('name')}")
+                    st.success(f"Created entity: {result.get('name')}")
+                    get_entities.clear()
                     st.rerun()
                 except api_client.APIError as e:
                     st.error(f"Failed to create entity: {e.detail}")

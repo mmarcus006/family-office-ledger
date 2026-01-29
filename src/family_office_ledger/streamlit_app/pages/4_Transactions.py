@@ -4,26 +4,61 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
+from typing import Any
 
 import pandas as pd
 import streamlit as st
 
 from family_office_ledger.streamlit_app import api_client
 from family_office_ledger.streamlit_app.app import init_session_state
+from family_office_ledger.streamlit_app.styles import (
+    COLORS,
+    apply_custom_css,
+    format_currency,
+    section_header,
+)
 
 init_session_state()
+apply_custom_css()
 
-st.title("📝 Transactions")
+st.title("Transactions")
+
+
+@st.cache_data(ttl=30)
+def get_entities() -> list[dict[str, Any]]:
+    """Fetch entities with caching."""
+    try:
+        return api_client.list_entities()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=30)
+def get_accounts() -> list[dict[str, Any]]:
+    """Fetch accounts with caching."""
+    try:
+        return api_client.list_accounts()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=30)
+def get_transactions(
+    account_id: str | None, start: date, end: date
+) -> list[dict[str, Any]]:
+    """Fetch transactions with caching."""
+    try:
+        return api_client.list_transactions(
+            account_id=account_id, start_date=start, end_date=end
+        )
+    except Exception:
+        return []
+
 
 tab_entry, tab_history = st.tabs(["New Journal Entry", "Transaction History"])
 
-entities = []
-accounts = []
-try:
-    entities = api_client.list_entities()
-    accounts = api_client.list_accounts()
-except Exception:
-    pass
+entities = get_entities()
+accounts = get_accounts()
 
 if not entities:
     st.warning("No entities found. Create an entity first.")
@@ -34,7 +69,7 @@ account_map = {
 }
 
 with tab_entry:
-    st.subheader("Record Journal Entry")
+    section_header("Record Journal Entry")
 
     if not accounts:
         st.warning("No accounts found. Create accounts first on the Accounts page.")
@@ -47,13 +82,14 @@ with tab_entry:
 
         memo = st.text_input("Memo", placeholder="e.g., Monthly rent payment")
 
-        st.markdown("### Journal Entries")
+        st.markdown("<br>", unsafe_allow_html=True)
+        section_header("Journal Entries")
         st.caption("Debits must equal Credits for a balanced transaction.")
 
         if "entry_rows" not in st.session_state:
             st.session_state.entry_rows = 2
 
-        entries = []
+        entries: list[dict[str, str]] = []
         total_debits = Decimal("0")
         total_credits = Decimal("0")
 
@@ -95,11 +131,13 @@ with tab_entry:
 
         col_add, col_remove = st.columns(2)
         with col_add:
-            if st.button("➕ Add Row"):
+            if st.button("Add Row", key="add_row"):
                 st.session_state.entry_rows += 1
                 st.rerun()
         with col_remove:
-            if st.session_state.entry_rows > 2 and st.button("➖ Remove Row"):
+            if st.session_state.entry_rows > 2 and st.button(
+                "Remove Row", key="remove_row"
+            ):
                 st.session_state.entry_rows -= 1
                 st.rerun()
 
@@ -108,21 +146,48 @@ with tab_entry:
         diff = total_debits - total_credits
         col_summary1, col_summary2, col_summary3 = st.columns(3)
         with col_summary1:
-            st.metric("Total Debits", f"${total_debits:,.2f}")
+            st.metric("Total Debits", format_currency(float(total_debits)))
         with col_summary2:
-            st.metric("Total Credits", f"${total_credits:,.2f}")
+            st.metric("Total Credits", format_currency(float(total_credits)))
         with col_summary3:
             if diff == 0 and total_debits > 0:
-                st.success("✅ Balanced")
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color: {COLORS["positive"]}20;
+                        color: {COLORS["positive"]};
+                        padding: 0.75rem;
+                        border-radius: 6px;
+                        text-align: center;
+                        font-weight: 600;
+                    ">Balanced</div>
+                    """,
+                    unsafe_allow_html=True,
+                )
             elif diff != 0:
-                st.error(f"❌ Difference: ${abs(diff):,.2f}")
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color: {COLORS["negative"]}20;
+                        color: {COLORS["negative"]};
+                        padding: 0.75rem;
+                        border-radius: 6px;
+                        text-align: center;
+                        font-weight: 600;
+                    ">Difference: {format_currency(abs(float(diff)))}</div>
+                    """,
+                    unsafe_allow_html=True,
+                )
             else:
                 st.info("Enter amounts")
+
+        st.markdown("<br>", unsafe_allow_html=True)
 
         if st.button(
             "Post Transaction",
             type="primary",
             disabled=(diff != 0 or total_debits == 0),
+            use_container_width=True,
         ):
             valid_entries = [
                 e
@@ -134,6 +199,8 @@ with tab_entry:
                 st.error("Need at least 2 entries with amounts.")
             else:
                 try:
+                    if not isinstance(txn_date, date):
+                        txn_date = date.today()
                     result = api_client.post_transaction(
                         transaction_date=txn_date,
                         entries=valid_entries,
@@ -141,9 +208,10 @@ with tab_entry:
                         reference=reference,
                     )
                     st.success(
-                        f"✅ Transaction posted! ID: {result.get('id', 'unknown')[:8]}..."
+                        f"Transaction posted! ID: {result.get('id', 'unknown')[:8]}..."
                     )
                     st.session_state.entry_rows = 2
+                    get_transactions.clear()
                     st.rerun()
                 except api_client.APIError as e:
                     st.error(f"Failed to post: {e.detail}")
@@ -151,7 +219,7 @@ with tab_entry:
                     st.error(f"Error: {e}")
 
 with tab_history:
-    st.subheader("Transaction History")
+    section_header("Transaction History")
 
     col_filter1, col_filter2, col_filter3 = st.columns(3)
     with col_filter1:
@@ -169,11 +237,16 @@ with tab_history:
     with col_filter3:
         filter_end = st.date_input("To Date", value=date.today())
 
+    if not isinstance(filter_start, date):
+        filter_start = date.today() - timedelta(days=90)
+    if not isinstance(filter_end, date):
+        filter_end = date.today()
+
     try:
-        txns = api_client.list_transactions(
+        txns = get_transactions(
             account_id=filter_account if filter_account else None,
-            start_date=filter_start,
-            end_date=filter_end,
+            start=filter_start,
+            end=filter_end,
         )
         if txns:
             txns_sorted = sorted(
@@ -182,23 +255,26 @@ with tab_history:
 
             for txn in txns_sorted[:50]:
                 with st.expander(
-                    f"**{txn.get('transaction_date', 'N/A')}** - {txn.get('memo', 'No memo')} ({txn.get('reference', 'No ref')})"
+                    f"**{txn.get('transaction_date', 'N/A')}** - "
+                    f"{txn.get('memo', 'No memo')} ({txn.get('reference', 'No ref')})"
                 ):
-                    entries = txn.get("entries", [])
-                    if entries:
+                    txn_entries = txn.get("entries", [])
+                    if txn_entries:
                         entry_data = []
-                        for e in entries:
+                        for entry in txn_entries:
+                            debit_amt = Decimal(entry.get("debit_amount", 0) or 0)
+                            credit_amt = Decimal(entry.get("credit_amount", 0) or 0)
                             entry_data.append(
                                 {
                                     "Account": account_map.get(
-                                        str(e.get("account_id", "")),
-                                        str(e.get("account_id", ""))[:8],
+                                        str(entry.get("account_id", "")),
+                                        str(entry.get("account_id", ""))[:8],
                                     ),
-                                    "Debit": f"${Decimal(e.get('debit_amount', 0)):,.2f}"
-                                    if Decimal(e.get("debit_amount", 0)) > 0
+                                    "Debit": format_currency(float(debit_amt))
+                                    if debit_amt > 0
                                     else "",
-                                    "Credit": f"${Decimal(e.get('credit_amount', 0)):,.2f}"
-                                    if Decimal(e.get("credit_amount", 0)) > 0
+                                    "Credit": format_currency(float(credit_amt))
+                                    if credit_amt > 0
                                     else "",
                                 }
                             )

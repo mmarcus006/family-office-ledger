@@ -1,6 +1,11 @@
 from family_office_ledger.services.corporate_actions import CorporateActionServiceImpl
+from family_office_ledger.services.currency import (
+    CurrencyServiceImpl,
+    ExchangeRateNotFoundError,
+)
 from family_office_ledger.services.interfaces import (
     CorporateActionService,
+    CurrencyService,
     LedgerService,
     LotMatchingService,
     MatchResult,
@@ -44,11 +49,44 @@ from family_office_ledger.services.qsbs import (
     QSBSSummary,
     SecurityNotFoundError,
 )
+from family_office_ledger.services.tax_documents import (
+    AdjustmentCode,
+    Form8949,
+    Form8949Box,
+    Form8949Entry,
+    Form8949Part,
+    ScheduleD,
+    TaxDocumentService,
+    TaxDocumentSummary,
+)
+from family_office_ledger.services.portfolio_analytics import (
+    AssetAllocation,
+    AssetAllocationReport,
+    ConcentrationReport,
+    HoldingConcentration,
+    PerformanceMetrics,
+    PerformanceReport,
+    PortfolioAnalyticsService,
+)
+from family_office_ledger.services.audit import AuditService
 
 __all__ = [
+    "AuditService",
+    "AdjustmentCode",
+    "AssetAllocation",
+    "AssetAllocationReport",
     "AccountNotFoundError",
     "CorporateActionService",
+    "ConcentrationReport",
     "CorporateActionServiceImpl",
+    "CurrencyService",
+    "CurrencyServiceImpl",
+    "ExchangeRateNotFoundError",
+    "Form8949",
+    "Form8949Box",
+    "Form8949Entry",
+    "Form8949Part",
+    "HoldingConcentration",
     "InsufficientLotsError",
     "InvalidLotSelectionError",
     "LedgerService",
@@ -57,6 +95,9 @@ __all__ = [
     "LotMatchingServiceImpl",
     "MatchNotFoundError",
     "MatchResult",
+    "PerformanceMetrics",
+    "PerformanceReport",
+    "PortfolioAnalyticsService",
     "QSBSHolding",
     "QSBSService",
     "QSBSSummary",
@@ -65,11 +106,14 @@ __all__ = [
     "ReconciliationSummary",
     "ReportingService",
     "ReportingServiceImpl",
+    "ScheduleD",
     "SecurityLookup",
     "SecurityNotFoundError",
     "SessionExistsError",
     "SessionNotFoundError",
     "SessionSummary",
+    "TaxDocumentService",
+    "TaxDocumentSummary",
     "TransactionClassifier",
     "TransactionNotFoundError",
     "TransferMatchingService",

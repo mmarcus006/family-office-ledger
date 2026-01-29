@@ -83,6 +83,15 @@ disallow_untyped_defs = false
 module = ["streamlit", "streamlit.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["pandas", "pandas.*", "plotly", "plotly.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["family_office_ledger.streamlit_app.*"]
+disallow_untyped_defs = false
+warn_return_any = false
+
 [tool.ruff]
 line-length = 88
 target-version = "py312"

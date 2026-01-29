@@ -10,22 +10,44 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from family_office_ledger.api.schemas import (
     AccountCreate,
     AccountResponse,
+    AssetAllocationReportResponse,
+    AssetAllocationResponse,
+    AuditEntryResponse,
+    AuditListResponse,
+    AuditSummaryResponse,
     BalanceSheetResponse,
+    ConcentrationReportResponse,
     CreateSessionRequest,
     CreateTransferSessionRequest,
+    CurrencyConvertRequest,
+    CurrencyConvertResponse,
     EntityCreate,
     EntityResponse,
     EntryResponse,
+    ExchangeRateCreate,
+    ExchangeRateListResponse,
+    ExchangeRateResponse,
+    Form8949EntryResponse,
+    Form8949PartResponse,
+    Form8949Response,
+    GenerateTaxDocumentsRequest,
     HealthResponse,
+    HoldingConcentrationResponse,
     MarkQSBSRequest,
     MatchListResponse,
     MatchResponse,
+    PerformanceMetricsResponse,
+    PerformanceReportResponse,
+    PortfolioSummaryResponse,
     QSBSHoldingResponse,
     QSBSSummaryResponse,
     ReportResponse,
+    ScheduleDResponse,
     SecurityResponse,
     SessionResponse,
     SessionSummaryResponse,
+    TaxDocumentsResponse,
+    TaxDocumentSummaryResponse,
     TransactionCreate,
     TransactionResponse,
     TransferMatchListResponse,
@@ -33,39 +55,57 @@ from family_office_ledger.api.schemas import (
     TransferSessionResponse,
     TransferSummaryResponse,
 )
+from family_office_ledger.domain.audit import AuditAction, AuditEntityType
 from family_office_ledger.domain.entities import Account, Entity
+from family_office_ledger.domain.exchange_rates import ExchangeRate, ExchangeRateSource
 from family_office_ledger.domain.reconciliation import (
     ReconciliationMatch,
     ReconciliationMatchStatus,
     ReconciliationSession,
 )
 from family_office_ledger.domain.transactions import Entry, Transaction
+from family_office_ledger.domain.transfer_matching import (
+    TransferMatch,
+    TransferMatchingSession,
+    TransferMatchStatus,
+)
 from family_office_ledger.domain.value_objects import (
     AccountSubType,
     AccountType,
+    Currency,
     EntityType,
     Money,
 )
 from family_office_ledger.repositories.interfaces import (
     AccountRepository,
     EntityRepository,
-    ReconciliationSessionRepository,
     TransactionRepository,
 )
 from family_office_ledger.repositories.sqlite import (
     SQLiteAccountRepository,
     SQLiteDatabase,
     SQLiteEntityRepository,
+    SQLiteExchangeRateRepository,
     SQLitePositionRepository,
     SQLiteReconciliationSessionRepository,
     SQLiteSecurityRepository,
     SQLiteTaxLotRepository,
     SQLiteTransactionRepository,
 )
+from family_office_ledger.services.audit import AuditService
+from family_office_ledger.services.currency import (
+    CurrencyServiceImpl,
+    ExchangeRateNotFoundError,
+)
 from family_office_ledger.services.interfaces import LedgerService, ReportingService
 from family_office_ledger.services.ledger import (
     LedgerServiceImpl,
     UnbalancedTransactionError,
+)
+from family_office_ledger.services.portfolio_analytics import PortfolioAnalyticsService
+from family_office_ledger.services.qsbs import (
+    QSBSService,
+    SecurityNotFoundError,
 )
 from family_office_ledger.services.reconciliation import (
     MatchNotFoundError,
@@ -74,19 +114,11 @@ from family_office_ledger.services.reconciliation import (
     SessionNotFoundError,
 )
 from family_office_ledger.services.reporting import ReportingServiceImpl
+from family_office_ledger.services.tax_documents import TaxDocumentService
 from family_office_ledger.services.transfer_matching import (
     TransferMatchingService,
     TransferMatchNotFoundError,
     TransferSessionNotFoundError,
-)
-from family_office_ledger.domain.transfer_matching import (
-    TransferMatch,
-    TransferMatchingSession,
-    TransferMatchStatus,
-)
-from family_office_ledger.services.qsbs import (
-    QSBSService,
-    SecurityNotFoundError,
 )
 
 # Create routers
@@ -98,6 +130,10 @@ report_router = APIRouter(prefix="/reports", tags=["reports"])
 reconciliation_router = APIRouter(prefix="/reconciliation", tags=["reconciliation"])
 transfer_router = APIRouter(prefix="/transfers", tags=["transfers"])
 qsbs_router = APIRouter(prefix="/qsbs", tags=["qsbs"])
+tax_router = APIRouter(prefix="/tax", tags=["tax"])
+portfolio_router = APIRouter(prefix="/portfolio", tags=["portfolio"])
+audit_router = APIRouter(prefix="/audit", tags=["audit"])
+currency_router = APIRouter(prefix="/currency", tags=["currency"])
 
 
 # Dependency injection functions
@@ -191,13 +227,21 @@ def _account_to_response(account: Account) -> AccountResponse:
     )
 
 
+def _get_currency_str(currency: Currency | str) -> str:
+    if isinstance(currency, Currency):
+        return currency.value
+    return currency
+
+
 def _entry_to_response(entry: Entry) -> EntryResponse:
     """Convert Entry domain object to response schema."""
     return EntryResponse(
         id=entry.id,
         account_id=entry.account_id,
         debit_amount=str(entry.debit_amount.amount),
+        debit_currency=_get_currency_str(entry.debit_amount.currency),
         credit_amount=str(entry.credit_amount.amount),
+        credit_currency=_get_currency_str(entry.credit_amount.currency),
         memo=entry.memo,
     )
 
@@ -359,8 +403,12 @@ def post_transaction(
     for entry_data in payload.entries:
         entry = Entry(
             account_id=entry_data.account_id,
-            debit_amount=Money(Decimal(entry_data.debit_amount)),
-            credit_amount=Money(Decimal(entry_data.credit_amount)),
+            debit_amount=Money(
+                Decimal(entry_data.debit_amount), entry_data.debit_currency
+            ),
+            credit_amount=Money(
+                Decimal(entry_data.credit_amount), entry_data.credit_currency
+            ),
             memo=entry_data.memo,
         )
         entries.append(entry)
@@ -538,9 +586,7 @@ def dashboard_summary(
 def _serialize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
     serialized = {}
     for key, value in data.items():
-        if isinstance(value, Decimal):
-            serialized[key] = str(value)
-        elif isinstance(value, UUID):
+        if isinstance(value, Decimal) or isinstance(value, UUID):
             serialized[key] = str(value)
         else:
             serialized[key] = value
@@ -553,9 +599,7 @@ def _serialize_report_data(data: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for item in data:
         serialized_item = {}
         for key, value in item.items():
-            if isinstance(value, Decimal):
-                serialized_item[key] = str(value)
-            elif isinstance(value, UUID):
+            if isinstance(value, Decimal) or isinstance(value, UUID):
                 serialized_item[key] = str(value)
             elif isinstance(value, date):
                 serialized_item[key] = value.isoformat()
@@ -1183,4 +1227,678 @@ def get_qsbs_summary(
         total_cost_basis=str(summary.total_cost_basis),
         total_potential_exclusion=str(summary.total_potential_exclusion),
         holdings=holdings,
+    )
+
+
+def get_tax_document_service(db: SQLiteDatabase) -> TaxDocumentService:
+    entity_repo = SQLiteEntityRepository(db)
+    position_repo = SQLitePositionRepository(db)
+    tax_lot_repo = SQLiteTaxLotRepository(db)
+    security_repo = SQLiteSecurityRepository(db)
+    return TaxDocumentService(
+        entity_repo=entity_repo,
+        position_repo=position_repo,
+        tax_lot_repo=tax_lot_repo,
+        security_repo=security_repo,
+    )
+
+
+def _form8949_entry_to_response(entry: Any) -> Form8949EntryResponse:
+    return Form8949EntryResponse(
+        description=entry.description,
+        date_acquired=entry.date_acquired,
+        date_sold=entry.date_sold,
+        proceeds=str(entry.proceeds.amount),
+        cost_basis=str(entry.cost_basis.amount),
+        adjustment_code=entry.adjustment_code.value if entry.adjustment_code else None,
+        adjustment_amount=str(entry.adjustment_amount.amount)
+        if entry.adjustment_amount
+        else None,
+        gain_or_loss=str(entry.gain_or_loss.amount),
+        is_long_term=entry.is_long_term,
+        box=entry.box.value,
+    )
+
+
+def _form8949_part_to_response(part: Any) -> Form8949PartResponse:
+    return Form8949PartResponse(
+        box=part.box.value,
+        entries=[_form8949_entry_to_response(e) for e in part.entries],
+        total_proceeds=str(part.total_proceeds.amount),
+        total_cost_basis=str(part.total_cost_basis.amount),
+        total_adjustments=str(part.total_adjustments.amount),
+        total_gain_or_loss=str(part.total_gain_or_loss.amount),
+    )
+
+
+def _form8949_to_response(form: Any) -> Form8949Response:
+    return Form8949Response(
+        tax_year=form.tax_year,
+        taxpayer_name=form.taxpayer_name,
+        short_term_parts=[_form8949_part_to_response(p) for p in form.short_term_parts],
+        long_term_parts=[_form8949_part_to_response(p) for p in form.long_term_parts],
+        total_short_term_proceeds=str(form.total_short_term_proceeds.amount),
+        total_short_term_cost_basis=str(form.total_short_term_cost_basis.amount),
+        total_short_term_gain_or_loss=str(form.total_short_term_gain_or_loss.amount),
+        total_long_term_proceeds=str(form.total_long_term_proceeds.amount),
+        total_long_term_cost_basis=str(form.total_long_term_cost_basis.amount),
+        total_long_term_gain_or_loss=str(form.total_long_term_gain_or_loss.amount),
+    )
+
+
+def _schedule_d_to_response(schedule: Any) -> ScheduleDResponse:
+    return ScheduleDResponse(
+        tax_year=schedule.tax_year,
+        taxpayer_name=schedule.taxpayer_name,
+        line_1a_box_a=str(schedule.line_1a.amount),
+        line_1b_box_b=str(schedule.line_1b.amount),
+        line_1c_box_c=str(schedule.line_1c.amount),
+        line_7_net_short_term=str(schedule.line_7.amount),
+        line_8a_box_d=str(schedule.line_8a.amount),
+        line_8b_box_e=str(schedule.line_8b.amount),
+        line_8c_box_f=str(schedule.line_8c.amount),
+        line_15_net_long_term=str(schedule.line_15.amount),
+        line_16_combined=str(schedule.line_16.amount),
+    )
+
+
+def _tax_summary_to_response(summary: Any) -> TaxDocumentSummaryResponse:
+    return TaxDocumentSummaryResponse(
+        tax_year=summary.tax_year,
+        entity_name=summary.entity_name,
+        short_term_transactions=summary.short_term_transactions,
+        long_term_transactions=summary.long_term_transactions,
+        total_short_term_proceeds=str(summary.total_short_term_proceeds.amount),
+        total_short_term_cost_basis=str(summary.total_short_term_cost_basis.amount),
+        total_short_term_gain=str(summary.total_short_term_gain.amount),
+        total_long_term_proceeds=str(summary.total_long_term_proceeds.amount),
+        total_long_term_cost_basis=str(summary.total_long_term_cost_basis.amount),
+        total_long_term_gain=str(summary.total_long_term_gain.amount),
+        wash_sale_adjustments=str(summary.wash_sale_adjustments.amount),
+        net_capital_gain=str(summary.net_capital_gain.amount),
+    )
+
+
+@tax_router.post(
+    "/entities/{entity_id}/documents",
+    response_model=TaxDocumentsResponse,
+)
+def generate_tax_documents(
+    entity_id: UUID,
+    payload: GenerateTaxDocumentsRequest,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> TaxDocumentsResponse:
+    tax_service = get_tax_document_service(db)
+
+    lot_proceeds: dict[UUID, Money] | None = None
+    if payload.lot_proceeds:
+        lot_proceeds = {
+            UUID(lot_id): Money(Decimal(amount), "USD")
+            for lot_id, amount in payload.lot_proceeds.items()
+        }
+
+    try:
+        form_8949, schedule_d, summary = tax_service.generate_from_entity(
+            entity_id=entity_id,
+            tax_year=payload.tax_year,
+            lot_proceeds=lot_proceeds,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return TaxDocumentsResponse(
+        form_8949=_form8949_to_response(form_8949),
+        schedule_d=_schedule_d_to_response(schedule_d),
+        summary=_tax_summary_to_response(summary),
+    )
+
+
+@tax_router.get(
+    "/entities/{entity_id}/summary",
+    response_model=TaxDocumentSummaryResponse,
+)
+def get_tax_summary(
+    entity_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    tax_year: int = Query(..., ge=2000, le=2100),
+) -> TaxDocumentSummaryResponse:
+    tax_service = get_tax_document_service(db)
+
+    try:
+        summary = tax_service.get_tax_document_summary(
+            entity_id=entity_id,
+            tax_year=tax_year,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return _tax_summary_to_response(summary)
+
+
+@tax_router.get(
+    "/entities/{entity_id}/form-8949/csv",
+)
+def export_form_8949_csv(
+    entity_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    tax_year: int = Query(..., ge=2000, le=2100),
+) -> Any:
+    from fastapi.responses import Response
+
+    tax_service = get_tax_document_service(db)
+
+    try:
+        form_8949, _, _ = tax_service.generate_from_entity(
+            entity_id=entity_id,
+            tax_year=tax_year,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    csv_content = tax_service.export_form_8949_csv(form_8949)
+
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=form_8949_{tax_year}.csv"
+        },
+    )
+
+
+@tax_router.get(
+    "/entities/{entity_id}/schedule-d",
+    response_model=ScheduleDResponse,
+)
+def get_schedule_d(
+    entity_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    tax_year: int = Query(..., ge=2000, le=2100),
+) -> ScheduleDResponse:
+    tax_service = get_tax_document_service(db)
+
+    try:
+        form_8949, _, _ = tax_service.generate_from_entity(
+            entity_id=entity_id,
+            tax_year=tax_year,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    schedule_d = tax_service.generate_schedule_d(form_8949)
+    return _schedule_d_to_response(schedule_d)
+
+
+def get_portfolio_analytics_service(db: SQLiteDatabase) -> PortfolioAnalyticsService:
+    entity_repo = SQLiteEntityRepository(db)
+    position_repo = SQLitePositionRepository(db)
+    security_repo = SQLiteSecurityRepository(db)
+    return PortfolioAnalyticsService(
+        entity_repo=entity_repo,
+        position_repo=position_repo,
+        security_repo=security_repo,
+    )
+
+
+@portfolio_router.get(
+    "/allocation",
+    response_model=AssetAllocationReportResponse,
+)
+def get_asset_allocation(
+    db: Annotated[SQLiteDatabase, Depends()],
+    entity_ids: list[UUID] | None = Query(default=None),
+    as_of_date: date | None = Query(default=None),
+) -> AssetAllocationReportResponse:
+    from datetime import date as dt_date
+
+    service = get_portfolio_analytics_service(db)
+    effective_date = as_of_date or dt_date.today()
+
+    report = service.asset_allocation_report(
+        entity_ids=entity_ids,
+        as_of_date=effective_date,
+    )
+
+    return AssetAllocationReportResponse(
+        as_of_date=report.as_of_date,
+        entity_names=report.entity_names,
+        allocations=[
+            AssetAllocationResponse(
+                asset_class=a.asset_class.value,
+                market_value=str(a.market_value.amount),
+                cost_basis=str(a.cost_basis.amount),
+                unrealized_gain=str(a.unrealized_gain.amount),
+                allocation_percent=str(a.allocation_percent),
+                position_count=a.position_count,
+            )
+            for a in report.allocations
+        ],
+        total_market_value=str(report.total_market_value.amount),
+        total_cost_basis=str(report.total_cost_basis.amount),
+        total_unrealized_gain=str(report.total_unrealized_gain.amount),
+    )
+
+
+@portfolio_router.get(
+    "/concentration",
+    response_model=ConcentrationReportResponse,
+)
+def get_concentration_report(
+    db: Annotated[SQLiteDatabase, Depends()],
+    entity_ids: list[UUID] | None = Query(default=None),
+    as_of_date: date | None = Query(default=None),
+    top_n: int = Query(default=20, ge=1, le=100),
+) -> ConcentrationReportResponse:
+    from datetime import date as dt_date
+
+    service = get_portfolio_analytics_service(db)
+    effective_date = as_of_date or dt_date.today()
+
+    report = service.concentration_report(
+        entity_ids=entity_ids,
+        as_of_date=effective_date,
+        top_n=top_n,
+    )
+
+    return ConcentrationReportResponse(
+        as_of_date=report.as_of_date,
+        entity_names=report.entity_names,
+        holdings=[
+            HoldingConcentrationResponse(
+                security_id=h.security_id,
+                security_symbol=h.security_symbol,
+                security_name=h.security_name,
+                asset_class=h.asset_class.value,
+                market_value=str(h.market_value.amount),
+                cost_basis=str(h.cost_basis.amount),
+                unrealized_gain=str(h.unrealized_gain.amount),
+                concentration_percent=str(h.concentration_percent),
+                position_count=h.position_count,
+            )
+            for h in report.holdings
+        ],
+        total_market_value=str(report.total_market_value.amount),
+        top_5_concentration=str(report.top_5_concentration),
+        top_10_concentration=str(report.top_10_concentration),
+        largest_single_holding=str(report.largest_single_holding),
+    )
+
+
+@portfolio_router.get(
+    "/performance",
+    response_model=PerformanceReportResponse,
+)
+def get_performance_report(
+    db: Annotated[SQLiteDatabase, Depends()],
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    entity_ids: list[UUID] | None = Query(default=None),
+) -> PerformanceReportResponse:
+    service = get_portfolio_analytics_service(db)
+
+    report = service.performance_report(
+        entity_ids=entity_ids,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    return PerformanceReportResponse(
+        start_date=report.start_date,
+        end_date=report.end_date,
+        entity_names=report.entity_names,
+        metrics=[
+            PerformanceMetricsResponse(
+                entity_name=m.entity_name,
+                start_value=str(m.start_value.amount),
+                end_value=str(m.end_value.amount),
+                net_contributions=str(m.net_contributions.amount),
+                total_return_amount=str(m.total_return_amount.amount),
+                total_return_percent=str(m.total_return_percent),
+                unrealized_gain=str(m.unrealized_gain.amount),
+                unrealized_gain_percent=str(m.unrealized_gain_percent),
+            )
+            for m in report.metrics
+        ],
+        portfolio_total_return_amount=str(report.portfolio_total_return_amount.amount),
+        portfolio_total_return_percent=str(report.portfolio_total_return_percent),
+    )
+
+
+@portfolio_router.get(
+    "/summary",
+    response_model=PortfolioSummaryResponse,
+)
+def get_portfolio_summary(
+    db: Annotated[SQLiteDatabase, Depends()],
+    entity_ids: list[UUID] | None = Query(default=None),
+    as_of_date: date | None = Query(default=None),
+) -> PortfolioSummaryResponse:
+    from datetime import date as dt_date
+
+    service = get_portfolio_analytics_service(db)
+    effective_date = as_of_date or dt_date.today()
+
+    summary = service.get_portfolio_summary(
+        entity_ids=entity_ids,
+        as_of_date=effective_date,
+    )
+
+    return PortfolioSummaryResponse(
+        as_of_date=effective_date,
+        total_market_value=summary["total_market_value"],
+        total_cost_basis=summary["total_cost_basis"],
+        total_unrealized_gain=summary["total_unrealized_gain"],
+        asset_allocation=summary["asset_allocation"],
+        top_holdings=summary["top_holdings"],
+        concentration_metrics=summary["concentration_metrics"],
+    )
+
+
+def get_audit_service(db: SQLiteDatabase) -> AuditService:
+    return AuditService(db)
+
+
+def _audit_entry_to_response(entry: Any) -> AuditEntryResponse:
+    return AuditEntryResponse(
+        id=entry.id,
+        entity_type=entry.entity_type.value,
+        entity_id=entry.entity_id,
+        action=entry.action.value,
+        user_id=entry.user_id,
+        timestamp=entry.timestamp,
+        old_values=entry.old_values,
+        new_values=entry.new_values,
+        change_summary=entry.change_summary,
+        ip_address=entry.ip_address,
+        user_agent=entry.user_agent,
+    )
+
+
+@audit_router.get(
+    "/entries",
+    response_model=AuditListResponse,
+)
+def list_audit_entries(
+    db: Annotated[SQLiteDatabase, Depends()],
+    entity_type: str | None = Query(default=None),
+    action: str | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> AuditListResponse:
+    service = get_audit_service(db)
+
+    if entity_type:
+        entries = service.list_by_entity_type(
+            AuditEntityType(entity_type),
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            offset=offset,
+        )
+    elif action:
+        entries = service.list_by_action(
+            AuditAction(action),
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            offset=offset,
+        )
+    else:
+        entries = service.list_recent(limit=limit, offset=offset)
+
+    return AuditListResponse(
+        entries=[_audit_entry_to_response(e) for e in entries],
+        total=len(entries),
+    )
+
+
+@audit_router.get(
+    "/entries/{entry_id}",
+    response_model=AuditEntryResponse,
+)
+def get_audit_entry(
+    entry_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> AuditEntryResponse:
+    service = get_audit_service(db)
+
+    entry = service.get_entry(entry_id)
+    if entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Audit entry not found",
+        )
+
+    return _audit_entry_to_response(entry)
+
+
+@audit_router.get(
+    "/entities/{entity_type}/{entity_id}",
+    response_model=AuditListResponse,
+)
+def list_entity_audit_trail(
+    entity_type: str,
+    entity_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> AuditListResponse:
+    service = get_audit_service(db)
+
+    entries = service.list_by_entity(
+        AuditEntityType(entity_type),
+        entity_id,
+        limit=limit,
+        offset=offset,
+    )
+
+    return AuditListResponse(
+        entries=[_audit_entry_to_response(e) for e in entries],
+        total=len(entries),
+    )
+
+
+@audit_router.get(
+    "/summary",
+    response_model=AuditSummaryResponse,
+)
+def get_audit_summary(
+    db: Annotated[SQLiteDatabase, Depends()],
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+) -> AuditSummaryResponse:
+    service = get_audit_service(db)
+
+    summary = service.get_summary(start_date=start_date, end_date=end_date)
+
+    return AuditSummaryResponse(
+        total_entries=summary.total_entries,
+        entries_by_action={k.value: v for k, v in summary.entries_by_action.items()},
+        entries_by_entity_type={
+            k.value: v for k, v in summary.entries_by_entity_type.items()
+        },
+        oldest_entry=summary.oldest_entry,
+        newest_entry=summary.newest_entry,
+    )
+
+
+def get_currency_service(db: SQLiteDatabase) -> CurrencyServiceImpl:
+    repo = SQLiteExchangeRateRepository(db)
+    return CurrencyServiceImpl(repo)
+
+
+def _exchange_rate_to_response(rate: ExchangeRate) -> ExchangeRateResponse:
+    return ExchangeRateResponse(
+        id=rate.id,
+        from_currency=rate.from_currency,
+        to_currency=rate.to_currency,
+        rate=str(rate.rate),
+        effective_date=rate.effective_date,
+        source=rate.source.value,
+        created_at=rate.created_at,
+    )
+
+
+@currency_router.post(
+    "/rates",
+    response_model=ExchangeRateResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_exchange_rate(
+    payload: ExchangeRateCreate,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> ExchangeRateResponse:
+    currency_service = get_currency_service(db)
+
+    rate = ExchangeRate(
+        from_currency=payload.from_currency,
+        to_currency=payload.to_currency,
+        rate=Decimal(payload.rate),
+        effective_date=payload.effective_date,
+        source=ExchangeRateSource(payload.source),
+    )
+
+    currency_service.add_rate(rate)
+    return _exchange_rate_to_response(rate)
+
+
+@currency_router.get(
+    "/rates",
+    response_model=ExchangeRateListResponse,
+)
+def list_exchange_rates(
+    db: Annotated[SQLiteDatabase, Depends()],
+    from_currency: str | None = Query(default=None, min_length=3, max_length=3),
+    to_currency: str | None = Query(default=None, min_length=3, max_length=3),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+) -> ExchangeRateListResponse:
+    repo = SQLiteExchangeRateRepository(db)
+
+    if from_currency and to_currency:
+        rates = list(
+            repo.list_by_currency_pair(
+                from_currency, to_currency, start_date=start_date, end_date=end_date
+            )
+        )
+    elif start_date:
+        rates = list(repo.list_by_date(start_date))
+    else:
+        rates = []
+
+    return ExchangeRateListResponse(
+        rates=[_exchange_rate_to_response(r) for r in rates],
+        total=len(rates),
+    )
+
+
+@currency_router.get(
+    "/rates/latest",
+    response_model=ExchangeRateResponse,
+)
+def get_latest_exchange_rate(
+    db: Annotated[SQLiteDatabase, Depends()],
+    from_currency: str = Query(..., min_length=3, max_length=3),
+    to_currency: str = Query(..., min_length=3, max_length=3),
+) -> ExchangeRateResponse:
+    currency_service = get_currency_service(db)
+
+    rate = currency_service.get_latest_rate(from_currency, to_currency)
+    if rate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No exchange rate found for {from_currency}/{to_currency}",
+        )
+
+    return _exchange_rate_to_response(rate)
+
+
+@currency_router.get(
+    "/rates/{rate_id}",
+    response_model=ExchangeRateResponse,
+)
+def get_exchange_rate(
+    rate_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> ExchangeRateResponse:
+    repo = SQLiteExchangeRateRepository(db)
+
+    rate = repo.get(rate_id)
+    if rate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Exchange rate {rate_id} not found",
+        )
+
+    return _exchange_rate_to_response(rate)
+
+
+@currency_router.delete(
+    "/rates/{rate_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_exchange_rate(
+    rate_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> None:
+    repo = SQLiteExchangeRateRepository(db)
+
+    rate = repo.get(rate_id)
+    if rate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Exchange rate {rate_id} not found",
+        )
+
+    repo.delete(rate_id)
+
+
+@currency_router.post(
+    "/convert",
+    response_model=CurrencyConvertResponse,
+)
+def convert_currency(
+    payload: CurrencyConvertRequest,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> CurrencyConvertResponse:
+    currency_service = get_currency_service(db)
+
+    original = Money(Decimal(payload.amount), payload.from_currency)
+
+    try:
+        converted = currency_service.convert(
+            original, payload.to_currency, payload.as_of_date
+        )
+    except ExchangeRateNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    rate = currency_service.get_rate(
+        payload.from_currency, payload.to_currency, payload.as_of_date
+    )
+    rate_str = str(rate.rate) if rate else "inverse"
+
+    return CurrencyConvertResponse(
+        original_amount=payload.amount,
+        original_currency=payload.from_currency,
+        converted_amount=str(converted.amount),
+        converted_currency=payload.to_currency,
+        rate_used=rate_str,
+        as_of_date=payload.as_of_date,
     )

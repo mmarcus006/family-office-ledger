@@ -3,6 +3,28 @@ from decimal import Decimal
 from enum import Enum
 
 
+class Currency(str, Enum):
+    USD = "USD"
+    EUR = "EUR"
+    GBP = "GBP"
+    JPY = "JPY"
+    CHF = "CHF"
+    CAD = "CAD"
+    AUD = "AUD"
+    CNY = "CNY"
+    HKD = "HKD"
+    SGD = "SGD"
+    NZD = "NZD"
+    SEK = "SEK"
+    NOK = "NOK"
+    DKK = "DKK"
+    MXN = "MXN"
+    BRL = "BRL"
+    INR = "INR"
+    KRW = "KRW"
+    ZAR = "ZAR"
+
+
 class LotSelection(str, Enum):
     FIFO = "fifo"
     LIFO = "lifo"
@@ -101,14 +123,47 @@ class TransactionType(str, Enum):
     UNCLASSIFIED = "unclassified"
 
 
+class ExpenseCategory(str, Enum):
+    PAYROLL = "payroll"
+    RENT = "rent"
+    UTILITIES = "utilities"
+    INSURANCE = "insurance"
+    LEGAL = "legal"
+    ACCOUNTING = "accounting"
+    CONSULTING = "consulting"
+    TRAVEL = "travel"
+    MEALS = "meals"
+    ENTERTAINMENT = "entertainment"
+    SOFTWARE = "software"
+    HARDWARE = "hardware"
+    HOSTING = "hosting"
+    BANK_FEES = "bank_fees"
+    INTEREST_EXPENSE = "interest_expense"
+    OFFICE_SUPPLIES = "office_supplies"
+    MARKETING = "marketing"
+    CHARITABLE = "charitable"
+    OTHER = "other"
+
+
 @dataclass(frozen=True, slots=True)
 class Money:
     amount: Decimal
-    currency: str = "USD"
+    currency: Currency | str = "USD"
 
     def __post_init__(self) -> None:
         if not isinstance(self.amount, Decimal):
             object.__setattr__(self, "amount", Decimal(str(self.amount)))
+
+        if isinstance(self.currency, str):
+            try:
+                currency_enum = Currency[self.currency]
+                object.__setattr__(self, "currency", currency_enum)
+            except KeyError:
+                raise ValueError(f"Invalid currency: {self.currency}")
+        elif isinstance(self.currency, Currency):
+            pass
+        else:
+            raise ValueError(f"Invalid currency: {self.currency}")
 
     def __add__(self, other: "Money") -> "Money":
         if self.currency != other.currency:
@@ -152,7 +207,7 @@ class Money:
         return self.amount < Decimal("0")
 
     @classmethod
-    def zero(cls, currency: str = "USD") -> "Money":
+    def zero(cls, currency: Currency | str = "USD") -> "Money":
         return cls(Decimal("0"), currency)
 
 
@@ -205,6 +260,7 @@ class Quantity:
 
 
 __all__ = [
+    "Currency",
     "LotSelection",
     "EntityType",
     "AccountType",
@@ -213,6 +269,7 @@ __all__ = [
     "AcquisitionType",
     "CorporateActionType",
     "TransactionType",
+    "ExpenseCategory",
     "Money",
     "Quantity",
 ]

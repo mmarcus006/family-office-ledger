@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from family_office_ledger.domain.exchange_rates import ExchangeRate
 from family_office_ledger.domain.transactions import TaxLot, Transaction
 from family_office_ledger.domain.value_objects import LotSelection, Money, Quantity
 
@@ -212,6 +213,17 @@ class ReportingService(ABC):
         self,
         entity_ids: list[UUID] | None,
         as_of_date: date,
+        base_currency: str | None = None,
+    ) -> dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def fx_gains_losses_report(
+        self,
+        entity_ids: list[UUID] | None,
+        start_date: date,
+        end_date: date,
+        base_currency: str = "USD",
     ) -> dict[str, Any]:
         pass
 
@@ -281,4 +293,46 @@ class ReportingService(ABC):
         output_format: str,
         output_path: str,
     ) -> str:
+        pass
+
+
+class CurrencyService(ABC):
+    @abstractmethod
+    def add_rate(self, rate: ExchangeRate) -> None:
+        pass
+
+    @abstractmethod
+    def get_rate(
+        self,
+        from_currency: str,
+        to_currency: str,
+        effective_date: date,
+    ) -> ExchangeRate | None:
+        pass
+
+    @abstractmethod
+    def get_latest_rate(
+        self,
+        from_currency: str,
+        to_currency: str,
+    ) -> ExchangeRate | None:
+        pass
+
+    @abstractmethod
+    def convert(
+        self,
+        amount: Money,
+        to_currency: str,
+        as_of_date: date,
+    ) -> Money:
+        pass
+
+    @abstractmethod
+    def calculate_fx_gain_loss(
+        self,
+        original_amount: Money,
+        original_date: date,
+        current_date: date,
+        base_currency: str,
+    ) -> Money:
         pass

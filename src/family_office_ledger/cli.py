@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
@@ -10,6 +11,7 @@ from family_office_ledger.repositories.sqlite import (
     SQLiteAccountRepository,
     SQLiteDatabase,
     SQLiteEntityRepository,
+    SQLiteExchangeRateRepository,
     SQLitePositionRepository,
     SQLiteReconciliationSessionRepository,
     SQLiteSecurityRepository,
@@ -33,6 +35,13 @@ from family_office_ledger.services.transfer_matching import (
 )
 from family_office_ledger.domain.transfer_matching import TransferMatchStatus
 from family_office_ledger.services.qsbs import QSBSService, SecurityNotFoundError
+from family_office_ledger.services.tax_documents import TaxDocumentService
+from family_office_ledger.services.portfolio_analytics import PortfolioAnalyticsService
+from family_office_ledger.services.currency import (
+    CurrencyServiceImpl,
+    ExchangeRateNotFoundError,
+)
+from family_office_ledger.domain.exchange_rates import ExchangeRate, ExchangeRateSource
 
 
 def get_default_db_path() -> Path:
@@ -901,6 +910,452 @@ def cmd_qsbs_summary(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_tax_generate(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        entity_id = UUID(args.entity_id)
+    except ValueError:
+        print(f"Error: Invalid entity ID: {args.entity_id}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        entity_repo = SQLiteEntityRepository(db)
+        position_repo = SQLitePositionRepository(db)
+        tax_lot_repo = SQLiteTaxLotRepository(db)
+        security_repo = SQLiteSecurityRepository(db)
+        service = TaxDocumentService(
+            entity_repo, position_repo, tax_lot_repo, security_repo
+        )
+
+        form_8949, schedule_d, summary = service.generate_from_entity(
+            entity_id=entity_id,
+            tax_year=args.tax_year,
+        )
+
+        print(f"Tax Documents for {summary.entity_name} - {summary.tax_year}")
+        print("=" * 60)
+        print(f"\nForm 8949 Summary:")
+        print(f"  Short-term transactions: {summary.short_term_transactions}")
+        print(f"  Long-term transactions: {summary.long_term_transactions}")
+        print(f"\nSchedule D Summary:")
+        print(
+            f"  Net Short-term Gain/Loss: ${summary.total_short_term_gain.amount:,.2f}"
+        )
+        print(f"  Net Long-term Gain/Loss: ${summary.total_long_term_gain.amount:,.2f}")
+        print(f"  Combined (Line 16): ${summary.net_capital_gain.amount:,.2f}")
+
+        if summary.wash_sale_adjustments.amount != 0:
+            print(
+                f"\n  Wash Sale Adjustments: ${summary.wash_sale_adjustments.amount:,.2f}"
+            )
+
+        return 0
+
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_tax_summary(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        entity_id = UUID(args.entity_id)
+    except ValueError:
+        print(f"Error: Invalid entity ID: {args.entity_id}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        entity_repo = SQLiteEntityRepository(db)
+        position_repo = SQLitePositionRepository(db)
+        tax_lot_repo = SQLiteTaxLotRepository(db)
+        security_repo = SQLiteSecurityRepository(db)
+        service = TaxDocumentService(
+            entity_repo, position_repo, tax_lot_repo, security_repo
+        )
+
+        summary = service.get_tax_document_summary(
+            entity_id=entity_id,
+            tax_year=args.tax_year,
+        )
+
+        print(f"Tax Summary - {summary.entity_name} - {summary.tax_year}")
+        print("=" * 50)
+        print(f"\nShort-Term Capital Gains:")
+        print(f"  Transactions: {summary.short_term_transactions}")
+        print(f"  Proceeds: ${summary.total_short_term_proceeds.amount:,.2f}")
+        print(f"  Cost Basis: ${summary.total_short_term_cost_basis.amount:,.2f}")
+        print(f"  Gain/Loss: ${summary.total_short_term_gain.amount:,.2f}")
+
+        print(f"\nLong-Term Capital Gains:")
+        print(f"  Transactions: {summary.long_term_transactions}")
+        print(f"  Proceeds: ${summary.total_long_term_proceeds.amount:,.2f}")
+        print(f"  Cost Basis: ${summary.total_long_term_cost_basis.amount:,.2f}")
+        print(f"  Gain/Loss: ${summary.total_long_term_gain.amount:,.2f}")
+
+        print(f"\nNet Capital Gain/Loss: ${summary.net_capital_gain.amount:,.2f}")
+        return 0
+
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_tax_export(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        entity_id = UUID(args.entity_id)
+    except ValueError:
+        print(f"Error: Invalid entity ID: {args.entity_id}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        entity_repo = SQLiteEntityRepository(db)
+        position_repo = SQLitePositionRepository(db)
+        tax_lot_repo = SQLiteTaxLotRepository(db)
+        security_repo = SQLiteSecurityRepository(db)
+        service = TaxDocumentService(
+            entity_repo, position_repo, tax_lot_repo, security_repo
+        )
+
+        form_8949, _, _ = service.generate_from_entity(
+            entity_id=entity_id,
+            tax_year=args.tax_year,
+        )
+
+        output_path = args.output or f"form_8949_{args.tax_year}.csv"
+        service.export_form_8949_csv(form_8949, output_path)
+        print(f"Exported Form 8949 to {output_path}")
+        return 0
+
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_portfolio_allocation(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        entity_ids = None
+        if args.entity_ids:
+            entity_ids = [UUID(eid.strip()) for eid in args.entity_ids.split(",")]
+
+        from datetime import date as dt_date
+
+        as_of_date = dt_date.today()
+        if args.as_of:
+            as_of_date = dt_date.fromisoformat(args.as_of)
+
+        db = SQLiteDatabase(str(db_path))
+        entity_repo = SQLiteEntityRepository(db)
+        position_repo = SQLitePositionRepository(db)
+        security_repo = SQLiteSecurityRepository(db)
+        service = PortfolioAnalyticsService(entity_repo, position_repo, security_repo)
+
+        report = service.asset_allocation_report(entity_ids, as_of_date)
+
+        print(f"Asset Allocation Report - {as_of_date}")
+        print("=" * 70)
+        print(
+            f"\n{'Asset Class':<20} {'Market Value':>15} {'Allocation':>12} {'Positions':>10}"
+        )
+        print("-" * 60)
+
+        for alloc in report.allocations:
+            print(
+                f"{alloc.asset_class.value:<20} ${alloc.market_value.amount:>14,.2f} "
+                f"{alloc.allocation_percent:>10.2f}% {alloc.position_count:>10}"
+            )
+
+        print("-" * 60)
+        print(
+            f"{'Total':<20} ${report.total_market_value.amount:>14,.2f} {'100.00':>10}%"
+        )
+        print(f"\nUnrealized Gain/Loss: ${report.total_unrealized_gain.amount:,.2f}")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_portfolio_concentration(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        entity_ids = None
+        if args.entity_ids:
+            entity_ids = [UUID(eid.strip()) for eid in args.entity_ids.split(",")]
+
+        from datetime import date as dt_date
+
+        as_of_date = dt_date.today()
+        if args.as_of:
+            as_of_date = dt_date.fromisoformat(args.as_of)
+
+        db = SQLiteDatabase(str(db_path))
+        entity_repo = SQLiteEntityRepository(db)
+        position_repo = SQLitePositionRepository(db)
+        security_repo = SQLiteSecurityRepository(db)
+        service = PortfolioAnalyticsService(entity_repo, position_repo, security_repo)
+
+        report = service.concentration_report(entity_ids, as_of_date, top_n=args.top_n)
+
+        print(f"Concentration Report - Top {args.top_n} Holdings")
+        print("=" * 80)
+        print(
+            f"\n{'Symbol':<12} {'Name':<25} {'Market Value':>15} {'Concentration':>12}"
+        )
+        print("-" * 70)
+
+        for h in report.holdings:
+            print(
+                f"{h.security_symbol:<12} {h.security_name[:23]:<25} "
+                f"${h.market_value.amount:>14,.2f} {h.concentration_percent:>10.2f}%"
+            )
+
+        print("-" * 70)
+        print(f"\nConcentration Metrics:")
+        print(f"  Top 5 Holdings: {report.top_5_concentration:.2f}%")
+        print(f"  Top 10 Holdings: {report.top_10_concentration:.2f}%")
+        print(f"  Largest Single Holding: {report.largest_single_holding:.2f}%")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_portfolio_summary(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        entity_ids = None
+        if args.entity_ids:
+            entity_ids = [UUID(eid.strip()) for eid in args.entity_ids.split(",")]
+
+        from datetime import date as dt_date
+
+        as_of_date = dt_date.today()
+        if args.as_of:
+            as_of_date = dt_date.fromisoformat(args.as_of)
+
+        db = SQLiteDatabase(str(db_path))
+        entity_repo = SQLiteEntityRepository(db)
+        position_repo = SQLitePositionRepository(db)
+        security_repo = SQLiteSecurityRepository(db)
+        service = PortfolioAnalyticsService(entity_repo, position_repo, security_repo)
+
+        summary = service.get_portfolio_summary(entity_ids, as_of_date)
+
+        print(f"Portfolio Summary - {as_of_date}")
+        print("=" * 50)
+        print(f"\nTotal Market Value: ${Decimal(summary['total_market_value']):,.2f}")
+        print(f"Total Cost Basis: ${Decimal(summary['total_cost_basis']):,.2f}")
+        print(
+            f"Unrealized Gain/Loss: ${Decimal(summary['total_unrealized_gain']):,.2f}"
+        )
+
+        if summary["asset_allocation"]:
+            print("\nAsset Allocation:")
+            for alloc in summary["asset_allocation"]:
+                print(f"  {alloc['asset_class']:<20} {alloc['allocation_percent']:>6}%")
+
+        if summary["top_holdings"]:
+            print("\nTop 5 Holdings:")
+            for h in summary["top_holdings"]:
+                print(f"  {h['symbol']:<12} {h['concentration_percent']:>6}%")
+
+        metrics = summary["concentration_metrics"]
+        print("\nConcentration Risk:")
+        print(f"  Top 5: {metrics['top_5_concentration']}%")
+        print(f"  Top 10: {metrics['top_10_concentration']}%")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_currency_rates_add(args: argparse.Namespace) -> int:
+    """Add an exchange rate."""
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Database not found: {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        db.initialize()
+        repo = SQLiteExchangeRateRepository(db)
+        service = CurrencyServiceImpl(repo)
+
+        effective_date = dt.strptime(args.date, "%Y-%m-%d").date()
+        rate = ExchangeRate(
+            from_currency=args.from_currency.upper(),
+            to_currency=args.to_currency.upper(),
+            rate=Decimal(args.rate),
+            effective_date=effective_date,
+            source=ExchangeRateSource(args.source),
+        )
+        service.add_rate(rate)
+        print(
+            f"Added rate: {args.from_currency.upper()}/{args.to_currency.upper()} "
+            f"= {args.rate} (effective {args.date})"
+        )
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_currency_rates_list(args: argparse.Namespace) -> int:
+    """List exchange rates."""
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Database not found: {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        repo = SQLiteExchangeRateRepository(db)
+
+        start = (
+            dt.strptime(args.start_date, "%Y-%m-%d").date() if args.start_date else None
+        )
+        end = dt.strptime(args.end_date, "%Y-%m-%d").date() if args.end_date else None
+
+        rates = list(
+            repo.list_by_currency_pair(
+                args.from_currency.upper(),
+                args.to_currency.upper(),
+                start_date=start,
+                end_date=end,
+            )
+        )
+
+        if not rates:
+            print(
+                f"No rates found for {args.from_currency.upper()}/{args.to_currency.upper()}"
+            )
+            return 0
+
+        print(
+            f"Exchange rates for {args.from_currency.upper()}/{args.to_currency.upper()}:"
+        )
+        print("-" * 50)
+        for rate in rates:
+            print(f"  {rate.effective_date}: {rate.rate} (source: {rate.source.value})")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_currency_rates_latest(args: argparse.Namespace) -> int:
+    """Get latest exchange rate."""
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Database not found: {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        repo = SQLiteExchangeRateRepository(db)
+        service = CurrencyServiceImpl(repo)
+
+        rate = service.get_latest_rate(
+            args.from_currency.upper(), args.to_currency.upper()
+        )
+        if rate is None:
+            print(
+                f"No rate found for {args.from_currency.upper()}/{args.to_currency.upper()}"
+            )
+            return 1
+        print(
+            f"Latest {args.from_currency.upper()}/{args.to_currency.upper()}: {rate.rate}"
+        )
+        print(f"  Effective: {rate.effective_date}")
+        print(f"  Source: {rate.source.value}")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_currency_convert(args: argparse.Namespace) -> int:
+    """Convert amount between currencies."""
+    from datetime import datetime as dt
+    from family_office_ledger.domain.value_objects import Money
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Database not found: {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        repo = SQLiteExchangeRateRepository(db)
+        service = CurrencyServiceImpl(repo)
+
+        as_of_date = dt.strptime(args.date, "%Y-%m-%d").date()
+        amount = Money(Decimal(args.amount), args.from_currency.upper())
+
+        converted = service.convert(amount, args.to_currency.upper(), as_of_date)
+        print(
+            f"{args.amount} {args.from_currency.upper()} = {converted.amount} {args.to_currency.upper()}"
+        )
+        print(f"  As of: {as_of_date}")
+        return 0
+
+    except ExchangeRateNotFoundError as e:
+        print(f"Error: {e}")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="fol",
@@ -1174,6 +1629,169 @@ def main(argv: list[str] | None = None) -> int:
     qsbs_summary_parser.add_argument("--as-of", help="As-of date (YYYY-MM-DD)")
     qsbs_summary_parser.set_defaults(func=cmd_qsbs_summary)
 
+    # tax command group
+    tax_parser = subparsers.add_parser("tax", help="Tax document generation commands")
+    tax_subparsers = tax_parser.add_subparsers(
+        dest="tax_command", help="Tax document subcommands"
+    )
+
+    # tax generate
+    tax_generate_parser = tax_subparsers.add_parser(
+        "generate", help="Generate tax documents for an entity"
+    )
+    tax_generate_parser.add_argument(
+        "--entity-id", required=True, help="Entity ID to generate documents for"
+    )
+    tax_generate_parser.add_argument(
+        "--tax-year", type=int, required=True, help="Tax year (e.g., 2024)"
+    )
+    tax_generate_parser.set_defaults(func=cmd_tax_generate)
+
+    # tax summary
+    tax_summary_parser = tax_subparsers.add_parser(
+        "summary", help="Show tax summary for an entity"
+    )
+    tax_summary_parser.add_argument("--entity-id", required=True, help="Entity ID")
+    tax_summary_parser.add_argument(
+        "--tax-year", type=int, required=True, help="Tax year (e.g., 2024)"
+    )
+    tax_summary_parser.set_defaults(func=cmd_tax_summary)
+
+    # tax export
+    tax_export_parser = tax_subparsers.add_parser(
+        "export", help="Export Form 8949 to CSV"
+    )
+    tax_export_parser.add_argument("--entity-id", required=True, help="Entity ID")
+    tax_export_parser.add_argument(
+        "--tax-year", type=int, required=True, help="Tax year (e.g., 2024)"
+    )
+    tax_export_parser.add_argument(
+        "--output", "-o", help="Output file path (default: form_8949_<year>.csv)"
+    )
+    tax_export_parser.set_defaults(func=cmd_tax_export)
+
+    # portfolio command group
+    portfolio_parser = subparsers.add_parser(
+        "portfolio", help="Portfolio analytics commands"
+    )
+    portfolio_subparsers = portfolio_parser.add_subparsers(
+        dest="portfolio_command", help="Portfolio analytics subcommands"
+    )
+
+    # portfolio allocation
+    portfolio_allocation_parser = portfolio_subparsers.add_parser(
+        "allocation", help="Show asset allocation breakdown"
+    )
+    portfolio_allocation_parser.add_argument(
+        "--entity-ids", help="Comma-separated entity IDs (optional)"
+    )
+    portfolio_allocation_parser.add_argument("--as-of", help="As-of date (YYYY-MM-DD)")
+    portfolio_allocation_parser.set_defaults(func=cmd_portfolio_allocation)
+
+    # portfolio concentration
+    portfolio_concentration_parser = portfolio_subparsers.add_parser(
+        "concentration", help="Show top holdings concentration"
+    )
+    portfolio_concentration_parser.add_argument(
+        "--entity-ids", help="Comma-separated entity IDs (optional)"
+    )
+    portfolio_concentration_parser.add_argument(
+        "--as-of", help="As-of date (YYYY-MM-DD)"
+    )
+    portfolio_concentration_parser.add_argument(
+        "--top-n",
+        type=int,
+        default=20,
+        help="Number of top holdings to show (default: 20)",
+    )
+    portfolio_concentration_parser.set_defaults(func=cmd_portfolio_concentration)
+
+    # portfolio summary
+    portfolio_summary_parser = portfolio_subparsers.add_parser(
+        "summary", help="Show portfolio summary"
+    )
+    portfolio_summary_parser.add_argument(
+        "--entity-ids", help="Comma-separated entity IDs (optional)"
+    )
+    portfolio_summary_parser.add_argument("--as-of", help="As-of date (YYYY-MM-DD)")
+    portfolio_summary_parser.set_defaults(func=cmd_portfolio_summary)
+
+    # currency command group
+    currency_parser = subparsers.add_parser(
+        "currency", help="Currency and exchange rate management"
+    )
+    currency_subparsers = currency_parser.add_subparsers(
+        dest="currency_command", help="Currency subcommands"
+    )
+
+    # currency rates-add
+    rates_add_parser = currency_subparsers.add_parser(
+        "rates-add", help="Add an exchange rate"
+    )
+    rates_add_parser.add_argument(
+        "--from",
+        dest="from_currency",
+        required=True,
+        help="Source currency (e.g., USD)",
+    )
+    rates_add_parser.add_argument(
+        "--to", dest="to_currency", required=True, help="Target currency (e.g., EUR)"
+    )
+    rates_add_parser.add_argument(
+        "--rate", required=True, help="Exchange rate (e.g., 0.92)"
+    )
+    rates_add_parser.add_argument(
+        "--date", required=True, help="Effective date (YYYY-MM-DD)"
+    )
+    rates_add_parser.add_argument(
+        "--source", default="manual", help="Rate source (default: manual)"
+    )
+    rates_add_parser.set_defaults(func=cmd_currency_rates_add)
+
+    # currency rates-list
+    rates_list_parser = currency_subparsers.add_parser(
+        "rates-list", help="List exchange rates"
+    )
+    rates_list_parser.add_argument(
+        "--from", dest="from_currency", required=True, help="Source currency"
+    )
+    rates_list_parser.add_argument(
+        "--to", dest="to_currency", required=True, help="Target currency"
+    )
+    rates_list_parser.add_argument(
+        "--start-date", help="Start date filter (YYYY-MM-DD)"
+    )
+    rates_list_parser.add_argument("--end-date", help="End date filter (YYYY-MM-DD)")
+    rates_list_parser.set_defaults(func=cmd_currency_rates_list)
+
+    # currency rates-latest
+    rates_latest_parser = currency_subparsers.add_parser(
+        "rates-latest", help="Get latest exchange rate"
+    )
+    rates_latest_parser.add_argument(
+        "--from", dest="from_currency", required=True, help="Source currency"
+    )
+    rates_latest_parser.add_argument(
+        "--to", dest="to_currency", required=True, help="Target currency"
+    )
+    rates_latest_parser.set_defaults(func=cmd_currency_rates_latest)
+
+    # currency convert
+    convert_parser = currency_subparsers.add_parser(
+        "convert", help="Convert an amount between currencies"
+    )
+    convert_parser.add_argument("--amount", required=True, help="Amount to convert")
+    convert_parser.add_argument(
+        "--from", dest="from_currency", required=True, help="Source currency"
+    )
+    convert_parser.add_argument(
+        "--to", dest="to_currency", required=True, help="Target currency"
+    )
+    convert_parser.add_argument(
+        "--date", required=True, help="Conversion date (YYYY-MM-DD)"
+    )
+    convert_parser.set_defaults(func=cmd_currency_convert)
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -1196,6 +1814,24 @@ def main(argv: list[str] | None = None) -> int:
         not hasattr(args, "qsbs_command") or args.qsbs_command is None
     ):
         qsbs_parser.print_help()
+        return 0
+
+    if args.command == "tax" and (
+        not hasattr(args, "tax_command") or args.tax_command is None
+    ):
+        tax_parser.print_help()
+        return 0
+
+    if args.command == "portfolio" and (
+        not hasattr(args, "portfolio_command") or args.portfolio_command is None
+    ):
+        portfolio_parser.print_help()
+        return 0
+
+    if args.command == "currency" and (
+        not hasattr(args, "currency_command") or args.currency_command is None
+    ):
+        currency_parser.print_help()
         return 0
 
     result: int = args.func(args)

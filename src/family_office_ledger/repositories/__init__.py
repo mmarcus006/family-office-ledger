@@ -6,6 +6,7 @@ from family_office_ledger.repositories.interfaces import (
     SecurityRepository,
     TaxLotRepository,
     TransactionRepository,
+    VendorRepository,
 )
 from family_office_ledger.repositories.sqlite import (
     SQLiteAccountRepository,
@@ -16,6 +17,7 @@ from family_office_ledger.repositories.sqlite import (
     SQLiteSecurityRepository,
     SQLiteTaxLotRepository,
     SQLiteTransactionRepository,
+    SQLiteVendorRepository,
 )
 
 __all__ = [
@@ -26,6 +28,7 @@ __all__ = [
     "SecurityRepository",
     "TaxLotRepository",
     "TransactionRepository",
+    "VendorRepository",
     "SQLiteAccountRepository",
     "SQLiteDatabase",
     "SQLiteEntityRepository",
@@ -34,6 +37,7 @@ __all__ = [
     "SQLiteSecurityRepository",
     "SQLiteTaxLotRepository",
     "SQLiteTransactionRepository",
+    "SQLiteVendorRepository",
 ]
 
 # PostgreSQL support is optional - only available if psycopg2 is installed

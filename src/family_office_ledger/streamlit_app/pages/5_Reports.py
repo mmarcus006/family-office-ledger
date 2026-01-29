@@ -4,23 +4,39 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 from family_office_ledger.streamlit_app import api_client
 from family_office_ledger.streamlit_app.app import init_session_state
+from family_office_ledger.streamlit_app.styles import (
+    CHART_COLORS,
+    apply_custom_css,
+    format_currency,
+    get_plotly_layout,
+    section_header,
+)
 
 init_session_state()
+apply_custom_css()
 
-st.title("📈 Reports")
+st.title("Reports")
 
-entities = []
-try:
-    entities = api_client.list_entities()
-except Exception:
-    pass
+
+@st.cache_data(ttl=30)
+def get_entities() -> list[dict[str, Any]]:
+    """Fetch entities with caching."""
+    try:
+        return api_client.list_entities()
+    except Exception:
+        return []
+
+
+entities = get_entities()
 
 report_type = st.selectbox(
     "Report Type",
@@ -28,9 +44,11 @@ report_type = st.selectbox(
 )
 
 as_of = st.date_input("As of Date", value=date.today())
+if not isinstance(as_of, date):
+    as_of = date.today()
 
 if report_type == "Net Worth":
-    st.subheader("Net Worth Report")
+    section_header("Net Worth Report")
 
     if entities:
         entity_options = {str(e["id"]): e["name"] for e in entities}
@@ -51,20 +69,30 @@ if report_type == "Net Worth":
 
             totals = report.get("totals", {})
 
-            st.markdown("### Summary")
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Total Assets", f"${totals.get('total_assets', 0):,.2f}")
+                st.metric(
+                    "Total Assets",
+                    format_currency(float(totals.get("total_assets", 0))),
+                    border=True,
+                )
             with col2:
                 st.metric(
-                    "Total Liabilities", f"${totals.get('total_liabilities', 0):,.2f}"
+                    "Total Liabilities",
+                    format_currency(float(totals.get("total_liabilities", 0))),
+                    border=True,
                 )
             with col3:
-                st.metric("Net Worth", f"${totals.get('net_worth', 0):,.2f}")
+                st.metric(
+                    "Net Worth",
+                    format_currency(float(totals.get("net_worth", 0))),
+                    border=True,
+                )
 
             data = report.get("data", [])
             if data:
-                st.markdown("### Details by Entity")
+                st.markdown("<br>", unsafe_allow_html=True)
+                section_header("Details by Entity")
                 df = pd.DataFrame(data)
                 st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -75,20 +103,27 @@ if report_type == "Net Worth":
                         )
                         assets = df[df["balance_num"] > 0]
                         if not assets.empty:
-                            fig = px.pie(
-                                assets,
-                                values="balance_num",
-                                names="account_name"
-                                if "account_name" in assets.columns
-                                else "entity_name",
-                                title="Asset Allocation",
+                            fig = go.Figure(
+                                data=[
+                                    go.Pie(
+                                        labels=assets.get(
+                                            "account_name", assets["entity_name"]
+                                        ).tolist(),
+                                        values=assets["balance_num"].tolist(),
+                                        hole=0.4,
+                                        marker={"colors": CHART_COLORS},
+                                    )
+                                ]
+                            )
+                            fig.update_layout(
+                                **get_plotly_layout("Asset Allocation"), height=400
                             )
                             st.plotly_chart(fig, use_container_width=True)
                     except Exception:
                         pass
 
             st.download_button(
-                "📥 Download CSV",
+                "Download CSV",
                 data=pd.DataFrame(data).to_csv(index=False) if data else "",
                 file_name=f"net_worth_{as_of.isoformat()}.csv",
                 mime="text/csv",
@@ -100,7 +135,7 @@ if report_type == "Net Worth":
             st.error(f"Error generating report: {e}")
 
 elif report_type == "Balance Sheet":
-    st.subheader("Balance Sheet Report")
+    section_header("Balance Sheet Report")
 
     if not entities:
         st.warning("No entities found. Create an entity first.")
@@ -128,20 +163,31 @@ elif report_type == "Balance Sheet":
             totals = report.get("totals", {})
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Total Assets", f"${totals.get('total_assets', 0):,.2f}")
+                st.metric(
+                    "Total Assets",
+                    format_currency(float(totals.get("total_assets", 0))),
+                    border=True,
+                )
             with col2:
                 st.metric(
-                    "Total Liabilities", f"${totals.get('total_liabilities', 0):,.2f}"
+                    "Total Liabilities",
+                    format_currency(float(totals.get("total_liabilities", 0))),
+                    border=True,
                 )
             with col3:
-                st.metric("Total Equity", f"${totals.get('total_equity', 0):,.2f}")
+                st.metric(
+                    "Total Equity",
+                    format_currency(float(totals.get("total_equity", 0))),
+                    border=True,
+                )
 
             data = report.get("data", {})
 
             for section in ["assets", "liabilities", "equity"]:
                 rows = data.get(section, [])
                 if rows:
-                    st.markdown(f"#### {section.title()}")
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    section_header(section.title())
                     df = pd.DataFrame(rows)
                     display_cols = ["account_name", "balance"]
                     available_cols = [c for c in display_cols if c in df.columns]
@@ -157,7 +203,7 @@ elif report_type == "Balance Sheet":
             st.error(f"Error generating report: {e}")
 
 elif report_type == "Summary by Type":
-    st.subheader("Transaction Summary by Account Type")
+    section_header("Transaction Summary by Account Type")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -172,6 +218,11 @@ elif report_type == "Summary by Type":
             value=date.today(),
             key="summary_type_end",
         )
+
+    if not isinstance(start_date, date):
+        start_date = date.today().replace(day=1)
+    if not isinstance(end_date, date):
+        end_date = date.today()
 
     if entities:
         entity_options = {str(e["id"]): e["name"] for e in entities}
@@ -202,7 +253,9 @@ elif report_type == "Summary by Type":
                 for i, (key, value) in enumerate(totals.items()):
                     with cols[i % len(cols)]:
                         st.metric(
-                            key.replace("_", " ").title(), f"${float(value):,.2f}"
+                            key.replace("_", " ").title(),
+                            format_currency(float(value)),
+                            border=True,
                         )
 
             data = report.get("data", [])
@@ -211,7 +264,7 @@ elif report_type == "Summary by Type":
                 st.dataframe(df, use_container_width=True, hide_index=True)
 
                 st.download_button(
-                    "📥 Download CSV",
+                    "Download CSV",
                     data=df.to_csv(index=False),
                     file_name=f"summary_by_type_{start_date}_{end_date}.csv",
                     mime="text/csv",
@@ -225,7 +278,7 @@ elif report_type == "Summary by Type":
             st.error(f"Error generating report: {e}")
 
 elif report_type == "Summary by Entity":
-    st.subheader("Transaction Summary by Entity")
+    section_header("Transaction Summary by Entity")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -240,6 +293,11 @@ elif report_type == "Summary by Entity":
             value=date.today(),
             key="summary_entity_end",
         )
+
+    if not isinstance(start_date, date):
+        start_date = date.today().replace(day=1)
+    if not isinstance(end_date, date):
+        end_date = date.today()
 
     if entities:
         entity_options = {str(e["id"]): e["name"] for e in entities}
@@ -270,7 +328,9 @@ elif report_type == "Summary by Entity":
                 for i, (key, value) in enumerate(totals.items()):
                     with cols[i % len(cols)]:
                         st.metric(
-                            key.replace("_", " ").title(), f"${float(value):,.2f}"
+                            key.replace("_", " ").title(),
+                            format_currency(float(value)),
+                            border=True,
                         )
 
             data = report.get("data", [])
@@ -286,11 +346,13 @@ elif report_type == "Summary by Entity":
                             x="entity_name",
                             y=numeric_cols[0],
                             title="By Entity",
+                            color_discrete_sequence=CHART_COLORS,
                         )
+                        fig.update_layout(**get_plotly_layout())
                         st.plotly_chart(fig, use_container_width=True)
 
                 st.download_button(
-                    "📥 Download CSV",
+                    "Download CSV",
                     data=df.to_csv(index=False),
                     file_name=f"summary_by_entity_{start_date}_{end_date}.csv",
                     mime="text/csv",

@@ -30,6 +30,7 @@ class Entry:
     credit_amount: Money = field(default_factory=lambda: Money.zero())
     memo: str = ""
     tax_lot_id: UUID | None = None
+    category: str | None = None
 
     @property
     def net_amount(self) -> Money:
@@ -56,6 +57,11 @@ class Transaction:
     created_at: datetime = field(default_factory=_utc_now)
     is_reversed: bool = False
     reverses_transaction_id: UUID | None = None
+    category: str | None = None
+    tags: list[str] = field(default_factory=list)
+    vendor_id: UUID | None = None
+    is_recurring: bool = False
+    recurring_frequency: str | None = None
 
     def __post_init__(self) -> None:
         if self.posted_date is None:

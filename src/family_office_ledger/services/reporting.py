@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from family_office_ledger.domain.value_objects import AccountType
+from family_office_ledger.domain.value_objects import AccountType, Money
 from family_office_ledger.repositories.interfaces import (
     AccountRepository,
     EntityRepository,
@@ -18,7 +18,8 @@ from family_office_ledger.repositories.interfaces import (
     TaxLotRepository,
     TransactionRepository,
 )
-from family_office_ledger.services.interfaces import ReportingService
+from family_office_ledger.services.currency import ExchangeRateNotFoundError
+from family_office_ledger.services.interfaces import CurrencyService, ReportingService
 
 
 class ReportingServiceImpl(ReportingService):
@@ -32,6 +33,7 @@ class ReportingServiceImpl(ReportingService):
         position_repo: PositionRepository,
         tax_lot_repo: TaxLotRepository,
         security_repo: SecurityRepository,
+        currency_service: CurrencyService | None = None,
     ) -> None:
         self._entity_repo = entity_repo
         self._account_repo = account_repo
@@ -39,19 +41,40 @@ class ReportingServiceImpl(ReportingService):
         self._position_repo = position_repo
         self._tax_lot_repo = tax_lot_repo
         self._security_repo = security_repo
+        self._currency_service = currency_service
+
+    def _convert_to_base(
+        self,
+        amount: Decimal,
+        from_currency: str,
+        base_currency: str,
+        as_of_date: date,
+    ) -> Decimal:
+        """Convert amount to base currency. Returns original if no service or same currency."""
+        if self._currency_service is None:
+            return amount
+        if from_currency == base_currency:
+            return amount
+        try:
+            money = Money(amount, from_currency)
+            converted = self._currency_service.convert(money, base_currency, as_of_date)
+            return converted.amount
+        except ExchangeRateNotFoundError:
+            # If no rate, return original (log warning in production)
+            return amount
 
     def net_worth_report(
         self,
         entity_ids: list[UUID] | None,
         as_of_date: date,
+        base_currency: str | None = None,
     ) -> dict[str, Any]:
         """Generate net worth report showing total assets minus liabilities."""
-        # Get entities to include
         if entity_ids is None:
             entities = list(self._entity_repo.list_all())
             entity_ids = [e.id for e in entities]
         elif len(entity_ids) == 0:
-            return {
+            result: dict[str, Any] = {
                 "report_name": "Net Worth Report",
                 "as_of_date": as_of_date,
                 "data": [],
@@ -61,6 +84,9 @@ class ReportingServiceImpl(ReportingService):
                     "net_worth": Decimal("0"),
                 },
             }
+            if base_currency:
+                result["base_currency"] = base_currency
+            return result
 
         total_assets = Decimal("0")
         total_liabilities = Decimal("0")
@@ -74,16 +100,19 @@ class ReportingServiceImpl(ReportingService):
             entity_assets = Decimal("0")
             entity_liabilities = Decimal("0")
 
-            # Get all accounts for this entity
             accounts = list(self._account_repo.list_by_entity(entity_id))
 
             for account in accounts:
                 balance = self._calculate_account_balance(account.id, as_of_date)
 
+                if base_currency and self._currency_service:
+                    balance = self._convert_to_base(
+                        balance, account.currency, base_currency, as_of_date
+                    )
+
                 if account.account_type == AccountType.ASSET:
                     entity_assets += balance
                 elif account.account_type == AccountType.LIABILITY:
-                    # Liabilities typically have credit balances (negative in our system)
                     entity_liabilities += abs(balance)
 
             entity_data.append(
@@ -99,7 +128,7 @@ class ReportingServiceImpl(ReportingService):
             total_assets += entity_assets
             total_liabilities += entity_liabilities
 
-        return {
+        result = {
             "report_name": "Net Worth Report",
             "as_of_date": as_of_date,
             "data": entity_data,
@@ -107,6 +136,105 @@ class ReportingServiceImpl(ReportingService):
                 "total_assets": total_assets,
                 "total_liabilities": total_liabilities,
                 "net_worth": total_assets - total_liabilities,
+            },
+        }
+        if base_currency:
+            result["base_currency"] = base_currency
+        return result
+
+    def fx_gains_losses_report(
+        self,
+        entity_ids: list[UUID] | None,
+        start_date: date,
+        end_date: date,
+        base_currency: str = "USD",
+    ) -> dict[str, Any]:
+        """Generate FX gains/losses report for foreign currency holdings."""
+        if self._currency_service is None:
+            return {
+                "report_name": "FX Gains/Losses Report",
+                "date_range": {"start_date": start_date, "end_date": end_date},
+                "base_currency": base_currency,
+                "data": [],
+                "totals": {
+                    "total_fx_gain_loss": Decimal("0"),
+                },
+                "error": "Currency service not available",
+            }
+
+        if entity_ids is None:
+            entities = list(self._entity_repo.list_all())
+            entity_ids = [e.id for e in entities]
+
+        fx_data: list[dict[str, Any]] = []
+        total_fx_gain_loss = Decimal("0")
+
+        for entity_id in entity_ids:
+            entity = self._entity_repo.get(entity_id)
+            if entity is None:
+                continue
+
+            accounts = list(self._account_repo.list_by_entity(entity_id))
+
+            for account in accounts:
+                if account.currency == base_currency:
+                    continue
+
+                if account.account_type not in (
+                    AccountType.ASSET,
+                    AccountType.LIABILITY,
+                ):
+                    continue
+
+                opening_balance = self._calculate_account_balance(
+                    account.id, start_date
+                )
+                closing_balance = self._calculate_account_balance(account.id, end_date)
+
+                if opening_balance == Decimal("0") and closing_balance == Decimal("0"):
+                    continue
+
+                try:
+                    original_money = Money(opening_balance, account.currency)
+                    fx_gain_loss = self._currency_service.calculate_fx_gain_loss(
+                        original_money, start_date, end_date, base_currency
+                    )
+
+                    fx_data.append(
+                        {
+                            "entity_id": str(entity_id),
+                            "entity_name": entity.name,
+                            "account_id": str(account.id),
+                            "account_name": account.name,
+                            "currency": account.currency,
+                            "opening_balance": opening_balance,
+                            "closing_balance": closing_balance,
+                            "fx_gain_loss": fx_gain_loss.amount,
+                        }
+                    )
+                    total_fx_gain_loss += fx_gain_loss.amount
+                except ExchangeRateNotFoundError:
+                    fx_data.append(
+                        {
+                            "entity_id": str(entity_id),
+                            "entity_name": entity.name,
+                            "account_id": str(account.id),
+                            "account_name": account.name,
+                            "currency": account.currency,
+                            "opening_balance": opening_balance,
+                            "closing_balance": closing_balance,
+                            "fx_gain_loss": None,
+                            "error": "Exchange rate not found",
+                        }
+                    )
+
+        return {
+            "report_name": "FX Gains/Losses Report",
+            "date_range": {"start_date": start_date, "end_date": end_date},
+            "base_currency": base_currency,
+            "data": fx_data,
+            "totals": {
+                "total_fx_gain_loss": total_fx_gain_loss,
             },
         }
 
