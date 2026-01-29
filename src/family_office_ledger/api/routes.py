@@ -12,6 +12,7 @@ from family_office_ledger.api.schemas import (
     AccountResponse,
     BalanceSheetResponse,
     CreateSessionRequest,
+    CreateTransferSessionRequest,
     EntityCreate,
     EntityResponse,
     EntryResponse,
@@ -23,6 +24,10 @@ from family_office_ledger.api.schemas import (
     SessionSummaryResponse,
     TransactionCreate,
     TransactionResponse,
+    TransferMatchListResponse,
+    TransferMatchResponse,
+    TransferSessionResponse,
+    TransferSummaryResponse,
 )
 from family_office_ledger.domain.entities import Account, Entity
 from family_office_ledger.domain.reconciliation import (
@@ -65,6 +70,16 @@ from family_office_ledger.services.reconciliation import (
     SessionNotFoundError,
 )
 from family_office_ledger.services.reporting import ReportingServiceImpl
+from family_office_ledger.services.transfer_matching import (
+    TransferMatchingService,
+    TransferMatchNotFoundError,
+    TransferSessionNotFoundError,
+)
+from family_office_ledger.domain.transfer_matching import (
+    TransferMatch,
+    TransferMatchingSession,
+    TransferMatchStatus,
+)
 
 # Create routers
 health_router = APIRouter(tags=["health"])
@@ -73,6 +88,7 @@ account_router = APIRouter(prefix="/accounts", tags=["accounts"])
 transaction_router = APIRouter(prefix="/transactions", tags=["transactions"])
 report_router = APIRouter(prefix="/reports", tags=["reports"])
 reconciliation_router = APIRouter(prefix="/reconciliation", tags=["reconciliation"])
+transfer_router = APIRouter(prefix="/transfers", tags=["transfers"])
 
 
 # Dependency injection functions
@@ -445,6 +461,83 @@ def balance_sheet_report(
     )
 
 
+@report_router.get("/summary-by-type", response_model=ReportResponse)
+def transaction_summary_by_type(
+    db: Annotated[SQLiteDatabase, Depends()],
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    entity_ids: list[UUID] | None = Query(default=None),
+) -> ReportResponse:
+    reporting_service = get_reporting_service(db)
+
+    report_data = reporting_service.transaction_summary_by_type(
+        entity_ids=entity_ids,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    return ReportResponse(
+        report_name=report_data["report_name"],
+        data=_serialize_report_data(report_data["data"]),
+        totals=_serialize_totals(report_data["totals"]),
+    )
+
+
+@report_router.get("/summary-by-entity", response_model=ReportResponse)
+def transaction_summary_by_entity(
+    db: Annotated[SQLiteDatabase, Depends()],
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    entity_ids: list[UUID] | None = Query(default=None),
+) -> ReportResponse:
+    reporting_service = get_reporting_service(db)
+
+    report_data = reporting_service.transaction_summary_by_entity(
+        entity_ids=entity_ids,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    return ReportResponse(
+        report_name=report_data["report_name"],
+        data=_serialize_report_data(report_data["data"]),
+        totals=_serialize_totals(report_data["totals"]),
+    )
+
+
+@report_router.get("/dashboard", response_model=ReportResponse)
+def dashboard_summary(
+    db: Annotated[SQLiteDatabase, Depends()],
+    as_of_date: date = Query(...),
+    entity_ids: list[UUID] | None = Query(default=None),
+) -> ReportResponse:
+    reporting_service = get_reporting_service(db)
+
+    report_data = reporting_service.dashboard_summary(
+        entity_ids=entity_ids,
+        as_of_date=as_of_date,
+    )
+
+    return ReportResponse(
+        report_name=report_data["report_name"],
+        as_of_date=report_data["as_of_date"],
+        data=_serialize_dashboard_data(report_data["data"]),
+        totals={},
+    )
+
+
+def _serialize_dashboard_data(data: dict[str, Any]) -> dict[str, Any]:
+    serialized = {}
+    for key, value in data.items():
+        if isinstance(value, Decimal):
+            serialized[key] = str(value)
+        elif isinstance(value, UUID):
+            serialized[key] = str(value)
+        else:
+            serialized[key] = value
+    return serialized
+
+
 def _serialize_report_data(data: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Serialize report data for JSON response."""
     serialized = []
@@ -742,4 +835,220 @@ def get_session_summary(
         rejected=summary.rejected,
         skipped=summary.skipped,
         match_rate=summary.match_rate,
+    )
+
+
+# Transfer Matching Endpoints
+_transfer_service_cache: dict[int, TransferMatchingService] = {}
+
+
+def get_transfer_matching_service(db: SQLiteDatabase) -> TransferMatchingService:
+    db_id = id(db)
+    if db_id not in _transfer_service_cache:
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        _transfer_service_cache[db_id] = TransferMatchingService(
+            transaction_repo=transaction_repo,
+            account_repo=account_repo,
+        )
+    return _transfer_service_cache[db_id]
+
+
+def _transfer_match_to_response(match: TransferMatch) -> TransferMatchResponse:
+    return TransferMatchResponse(
+        id=match.id,
+        source_transaction_id=match.source_transaction_id,
+        target_transaction_id=match.target_transaction_id,
+        source_account_id=match.source_account_id,
+        target_account_id=match.target_account_id,
+        amount=str(match.amount),
+        transfer_date=match.transfer_date,
+        confidence_score=match.confidence_score,
+        status=match.status.value,
+        memo=match.memo,
+        confirmed_at=match.confirmed_at,
+        created_at=match.created_at,
+    )
+
+
+def _transfer_session_to_response(
+    session: TransferMatchingSession,
+) -> TransferSessionResponse:
+    return TransferSessionResponse(
+        id=session.id,
+        entity_ids=session.entity_ids,
+        date_tolerance_days=session.date_tolerance_days,
+        status=session.status,
+        created_at=session.created_at,
+        closed_at=session.closed_at,
+        matches=[_transfer_match_to_response(m) for m in session.matches],
+    )
+
+
+@transfer_router.post(
+    "/sessions",
+    response_model=TransferSessionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_transfer_session(
+    payload: CreateTransferSessionRequest,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> TransferSessionResponse:
+    transfer_service = get_transfer_matching_service(db)
+
+    session = transfer_service.create_session(
+        entity_ids=payload.entity_ids,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        date_tolerance_days=payload.date_tolerance_days,
+    )
+
+    return _transfer_session_to_response(session)
+
+
+@transfer_router.get(
+    "/sessions/{session_id}",
+    response_model=TransferSessionResponse,
+)
+def get_transfer_session(
+    session_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> TransferSessionResponse:
+    transfer_service = get_transfer_matching_service(db)
+
+    try:
+        session = transfer_service.get_session(session_id)
+    except TransferSessionNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return _transfer_session_to_response(session)
+
+
+@transfer_router.get(
+    "/sessions/{session_id}/matches",
+    response_model=TransferMatchListResponse,
+)
+def list_transfer_matches(
+    session_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+    match_status: TransferMatchStatus | None = Query(default=None, alias="status"),
+) -> TransferMatchListResponse:
+    transfer_service = get_transfer_matching_service(db)
+
+    try:
+        matches = transfer_service.list_matches(session_id, status=match_status)
+    except TransferSessionNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return TransferMatchListResponse(
+        matches=[_transfer_match_to_response(m) for m in matches],
+        total=len(matches),
+    )
+
+
+@transfer_router.post(
+    "/sessions/{session_id}/matches/{match_id}/confirm",
+    response_model=TransferMatchResponse,
+)
+def confirm_transfer_match(
+    session_id: UUID,
+    match_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> TransferMatchResponse:
+    transfer_service = get_transfer_matching_service(db)
+
+    try:
+        match = transfer_service.confirm_match(session_id, match_id)
+    except TransferSessionNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+    except TransferMatchNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return _transfer_match_to_response(match)
+
+
+@transfer_router.post(
+    "/sessions/{session_id}/matches/{match_id}/reject",
+    response_model=TransferMatchResponse,
+)
+def reject_transfer_match(
+    session_id: UUID,
+    match_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> TransferMatchResponse:
+    transfer_service = get_transfer_matching_service(db)
+
+    try:
+        match = transfer_service.reject_match(session_id, match_id)
+    except TransferSessionNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+    except TransferMatchNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return _transfer_match_to_response(match)
+
+
+@transfer_router.post(
+    "/sessions/{session_id}/close",
+    response_model=TransferSessionResponse,
+)
+def close_transfer_session(
+    session_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> TransferSessionResponse:
+    transfer_service = get_transfer_matching_service(db)
+
+    try:
+        session = transfer_service.close_session(session_id)
+    except TransferSessionNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return _transfer_session_to_response(session)
+
+
+@transfer_router.get(
+    "/sessions/{session_id}/summary",
+    response_model=TransferSummaryResponse,
+)
+def get_transfer_summary(
+    session_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> TransferSummaryResponse:
+    transfer_service = get_transfer_matching_service(db)
+
+    try:
+        summary = transfer_service.get_summary(session_id)
+    except TransferSessionNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return TransferSummaryResponse(
+        total_matches=summary.total_matches,
+        pending_count=summary.pending_count,
+        confirmed_count=summary.confirmed_count,
+        rejected_count=summary.rejected_count,
+        total_confirmed_amount=str(summary.total_confirmed_amount),
     )

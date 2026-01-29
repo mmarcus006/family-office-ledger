@@ -198,6 +198,57 @@ class LedgerAPIClient:
         assert isinstance(data, dict)
         return data
 
+    async def transaction_summary_by_type(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        entity_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        }
+        if entity_ids is not None:
+            params["entity_ids"] = entity_ids
+        data = await self._request_json(
+            "GET", "/reports/summary-by-type", params=params
+        )
+        assert isinstance(data, dict)
+        return data
+
+    async def transaction_summary_by_entity(
+        self,
+        *,
+        start_date: date,
+        end_date: date,
+        entity_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+        }
+        if entity_ids is not None:
+            params["entity_ids"] = entity_ids
+        data = await self._request_json(
+            "GET", "/reports/summary-by-entity", params=params
+        )
+        assert isinstance(data, dict)
+        return data
+
+    async def dashboard_summary(
+        self,
+        *,
+        as_of_date: date,
+        entity_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"as_of_date": as_of_date.isoformat()}
+        if entity_ids is not None:
+            params["entity_ids"] = entity_ids
+        data = await self._request_json("GET", "/reports/dashboard", params=params)
+        assert isinstance(data, dict)
+        return data
+
 
 try:  # pragma: no cover
     importlib.import_module("httpx")  # pyright: ignore[reportMissingImports]

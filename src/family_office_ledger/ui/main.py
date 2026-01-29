@@ -44,9 +44,8 @@ def create_ui() -> None:
         transactions,
     )
 
-    add_global_styles()
-
     def shell(page_title: str, render_fn: Any) -> None:
+        add_global_styles()
         header()
         sidebar()
         with ui.column().classes("atlas-page"):  # noqa: SIM117

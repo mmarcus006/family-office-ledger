@@ -9,6 +9,7 @@ from family_office_ledger.api.routes import (
     reconciliation_router,
     report_router,
     transaction_router,
+    transfer_router,
 )
 from family_office_ledger.repositories.sqlite import SQLiteDatabase
 
@@ -52,6 +53,7 @@ def create_app() -> FastAPI:
     app.include_router(transaction_router)
     app.include_router(report_router)
     app.include_router(reconciliation_router)
+    app.include_router(transfer_router)
 
     return app
 

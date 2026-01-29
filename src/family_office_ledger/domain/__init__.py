@@ -8,6 +8,11 @@ from family_office_ledger.domain.reconciliation import (
     ReconciliationSessionStatus,
 )
 from family_office_ledger.domain.transactions import Entry, TaxLot, Transaction
+from family_office_ledger.domain.transfer_matching import (
+    TransferMatch,
+    TransferMatchingSession,
+    TransferMatchStatus,
+)
 from family_office_ledger.domain.value_objects import (
     CorporateActionType,
     LotSelection,
@@ -35,4 +40,7 @@ __all__ = [
     "TaxDocLine",
     "TaxLot",
     "Transaction",
+    "TransferMatch",
+    "TransferMatchingSession",
+    "TransferMatchStatus",
 ]

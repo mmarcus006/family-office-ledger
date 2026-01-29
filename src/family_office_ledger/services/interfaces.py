@@ -249,6 +249,32 @@ class ReportingService(ABC):
         pass
 
     @abstractmethod
+    def transaction_summary_by_type(
+        self,
+        entity_ids: list[UUID] | None,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def transaction_summary_by_entity(
+        self,
+        entity_ids: list[UUID] | None,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, Any]:
+        pass
+
+    @abstractmethod
+    def dashboard_summary(
+        self,
+        entity_ids: list[UUID] | None,
+        as_of_date: date,
+    ) -> dict[str, Any]:
+        pass
+
+    @abstractmethod
     def export_report(
         self,
         report_data: dict[str, Any],

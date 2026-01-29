@@ -31,6 +31,13 @@ from family_office_ledger.services.transaction_classifier import (
     SecurityLookup,
     TransactionClassifier,
 )
+from family_office_ledger.services.transfer_matching import (
+    TransferMatchingService,
+    TransferMatchingSummary,
+    TransferMatchNotFoundError,
+    TransferSessionExistsError,
+    TransferSessionNotFoundError,
+)
 
 __all__ = [
     "AccountNotFoundError",
@@ -55,5 +62,10 @@ __all__ = [
     "SessionSummary",
     "TransactionClassifier",
     "TransactionNotFoundError",
+    "TransferMatchingService",
+    "TransferMatchingSummary",
+    "TransferMatchNotFoundError",
+    "TransferSessionExistsError",
+    "TransferSessionNotFoundError",
     "UnbalancedTransactionError",
 ]

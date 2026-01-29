@@ -26,6 +26,12 @@ from family_office_ledger.services.reconciliation import (
     SessionNotFoundError,
 )
 from family_office_ledger.services.transaction_classifier import TransactionClassifier
+from family_office_ledger.services.transfer_matching import (
+    TransferMatchingService,
+    TransferMatchNotFoundError,
+    TransferSessionNotFoundError,
+)
+from family_office_ledger.domain.transfer_matching import TransferMatchStatus
 
 
 def get_default_db_path() -> Path:
@@ -493,6 +499,229 @@ def cmd_reconcile_summary(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_transfer_create(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        entity_ids = None
+        if args.entity_ids:
+            entity_ids = [UUID(eid.strip()) for eid in args.entity_ids.split(",")]
+
+        start_date = None
+        end_date = None
+        if args.start_date:
+            from datetime import date as dt_date
+
+            start_date = dt_date.fromisoformat(args.start_date)
+        if args.end_date:
+            from datetime import date as dt_date
+
+            end_date = dt_date.fromisoformat(args.end_date)
+
+        db = SQLiteDatabase(str(db_path))
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        service = TransferMatchingService(transaction_repo, account_repo)
+
+        session = service.create_session(
+            entity_ids=entity_ids,
+            start_date=start_date,
+            end_date=end_date,
+            date_tolerance_days=args.tolerance,
+        )
+
+        print(f"Session created: {session.id}")
+        print(f"Found {len(session.matches)} potential transfer matches")
+        return 0
+
+    except ValueError as e:
+        print(f"Error: Invalid input: {e}")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_transfer_list(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        session_id = UUID(args.session_id)
+    except ValueError:
+        print(f"Error: Invalid session ID: {args.session_id}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        service = TransferMatchingService(transaction_repo, account_repo)
+
+        status_filter = None
+        if args.status:
+            status_filter = TransferMatchStatus(args.status)
+
+        matches = service.list_matches(session_id, status=status_filter)
+
+        print(f"{'Match ID':<40} {'Status':<12} {'Amount':<15} {'Date':<12}")
+        print("-" * 85)
+        for match in matches:
+            amount_str = f"${match.amount}"
+            print(
+                f"{str(match.id):<40} {match.status.value:<12} "
+                f"{amount_str:<15} {match.transfer_date}"
+            )
+
+        print(f"Total: {len(matches)} matches")
+        return 0
+
+    except TransferSessionNotFoundError:
+        print("Error: Session not found")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_transfer_confirm(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        session_id = UUID(args.session_id)
+        match_id = UUID(args.match_id)
+    except ValueError as e:
+        print(f"Error: Invalid UUID: {e}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        service = TransferMatchingService(transaction_repo, account_repo)
+
+        service.confirm_match(session_id, match_id)
+        print(f"Match {match_id} confirmed")
+        return 0
+
+    except TransferSessionNotFoundError:
+        print("Error: Session not found")
+        return 1
+    except TransferMatchNotFoundError:
+        print("Error: Match not found")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_transfer_reject(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        session_id = UUID(args.session_id)
+        match_id = UUID(args.match_id)
+    except ValueError as e:
+        print(f"Error: Invalid UUID: {e}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        service = TransferMatchingService(transaction_repo, account_repo)
+
+        service.reject_match(session_id, match_id)
+        print(f"Match {match_id} rejected")
+        return 0
+
+    except TransferSessionNotFoundError:
+        print("Error: Session not found")
+        return 1
+    except TransferMatchNotFoundError:
+        print("Error: Match not found")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_transfer_close(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        session_id = UUID(args.session_id)
+    except ValueError:
+        print(f"Error: Invalid session ID: {args.session_id}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        service = TransferMatchingService(transaction_repo, account_repo)
+
+        session = service.close_session(session_id)
+        print(f"Session {session_id} closed (status: {session.status})")
+        return 0
+
+    except TransferSessionNotFoundError:
+        print("Error: Session not found")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_transfer_summary(args: argparse.Namespace) -> int:
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        session_id = UUID(args.session_id)
+    except ValueError:
+        print(f"Error: Invalid session ID: {args.session_id}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        service = TransferMatchingService(transaction_repo, account_repo)
+
+        summary = service.get_summary(session_id)
+        print("Transfer Matching Summary")
+        print(f"  Total Matches: {summary.total_matches}")
+        print(f"  Confirmed: {summary.confirmed_count}")
+        print(f"  Rejected: {summary.rejected_count}")
+        print(f"  Pending: {summary.pending_count}")
+        print(f"  Confirmed Amount: ${summary.total_confirmed_amount}")
+        return 0
+
+    except TransferSessionNotFoundError:
+        print("Error: Session not found")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -651,6 +880,82 @@ def main(argv: list[str] | None = None) -> int:
     )
     reconcile_summary_parser.set_defaults(func=cmd_reconcile_summary)
 
+    # transfer command group
+    transfer_parser = subparsers.add_parser(
+        "transfer", help="Transfer matching commands"
+    )
+    transfer_subparsers = transfer_parser.add_subparsers(
+        dest="transfer_command", help="Transfer matching subcommands"
+    )
+
+    # transfer create
+    transfer_create_parser = transfer_subparsers.add_parser(
+        "create", help="Create a transfer matching session"
+    )
+    transfer_create_parser.add_argument(
+        "--entity-ids", help="Comma-separated entity IDs (optional)"
+    )
+    transfer_create_parser.add_argument("--start-date", help="Start date (YYYY-MM-DD)")
+    transfer_create_parser.add_argument("--end-date", help="End date (YYYY-MM-DD)")
+    transfer_create_parser.add_argument(
+        "--tolerance", type=int, default=3, help="Date tolerance in days (default: 3)"
+    )
+    transfer_create_parser.set_defaults(func=cmd_transfer_create)
+
+    # transfer list
+    transfer_list_parser = transfer_subparsers.add_parser(
+        "list", help="List matches in a session"
+    )
+    transfer_list_parser.add_argument("--session-id", required=True, help="Session ID")
+    transfer_list_parser.add_argument(
+        "--status",
+        choices=["pending", "confirmed", "rejected"],
+        help="Filter by status",
+    )
+    transfer_list_parser.set_defaults(func=cmd_transfer_list)
+
+    # transfer confirm
+    transfer_confirm_parser = transfer_subparsers.add_parser(
+        "confirm", help="Confirm a match"
+    )
+    transfer_confirm_parser.add_argument(
+        "--session-id", required=True, help="Session ID"
+    )
+    transfer_confirm_parser.add_argument(
+        "--match-id", required=True, help="Match ID to confirm"
+    )
+    transfer_confirm_parser.set_defaults(func=cmd_transfer_confirm)
+
+    # transfer reject
+    transfer_reject_parser = transfer_subparsers.add_parser(
+        "reject", help="Reject a match"
+    )
+    transfer_reject_parser.add_argument(
+        "--session-id", required=True, help="Session ID"
+    )
+    transfer_reject_parser.add_argument(
+        "--match-id", required=True, help="Match ID to reject"
+    )
+    transfer_reject_parser.set_defaults(func=cmd_transfer_reject)
+
+    # transfer close
+    transfer_close_parser = transfer_subparsers.add_parser(
+        "close", help="Close a session"
+    )
+    transfer_close_parser.add_argument(
+        "--session-id", required=True, help="Session ID to close"
+    )
+    transfer_close_parser.set_defaults(func=cmd_transfer_close)
+
+    # transfer summary
+    transfer_summary_parser = transfer_subparsers.add_parser(
+        "summary", help="Show session summary"
+    )
+    transfer_summary_parser.add_argument(
+        "--session-id", required=True, help="Session ID"
+    )
+    transfer_summary_parser.set_defaults(func=cmd_transfer_summary)
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -661,6 +966,12 @@ def main(argv: list[str] | None = None) -> int:
         not hasattr(args, "reconcile_command") or args.reconcile_command is None
     ):
         reconcile_parser.print_help()
+        return 0
+
+    if args.command == "transfer" and (
+        not hasattr(args, "transfer_command") or args.transfer_command is None
+    ):
+        transfer_parser.print_help()
         return 0
 
     result: int = args.func(args)

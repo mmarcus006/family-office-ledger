@@ -359,13 +359,147 @@ class ReportingServiceImpl(ReportingService):
             },
         }
 
+    def transaction_summary_by_type(
+        self,
+        entity_ids: list[UUID] | None,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, Any]:
+        if entity_ids is None:
+            entities = list(self._entity_repo.list_all())
+            entity_ids = [e.id for e in entities]
+
+        type_counts: dict[str, int] = {}
+        type_amounts: dict[str, Decimal] = {}
+
+        for entity_id in entity_ids:
+            transactions = list(
+                self._transaction_repo.list_by_entity(
+                    entity_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            )
+
+            for txn in transactions:
+                txn_type = txn.reference if txn.reference else "unclassified"
+                type_counts[txn_type] = type_counts.get(txn_type, 0) + 1
+                type_amounts[txn_type] = (
+                    type_amounts.get(txn_type, Decimal("0")) + txn.total_debits.amount
+                )
+
+        data = [
+            {
+                "transaction_type": t,
+                "count": type_counts[t],
+                "total_amount": type_amounts[t],
+            }
+            for t in sorted(type_counts.keys())
+        ]
+
+        total_count = sum(type_counts.values())
+        total_amount = sum(type_amounts.values())
+
+        return {
+            "report_name": "Transaction Summary by Type",
+            "date_range": {"start_date": start_date, "end_date": end_date},
+            "data": data,
+            "totals": {
+                "total_transactions": total_count,
+                "total_amount": total_amount,
+            },
+        }
+
+    def transaction_summary_by_entity(
+        self,
+        entity_ids: list[UUID] | None,
+        start_date: date,
+        end_date: date,
+    ) -> dict[str, Any]:
+        if entity_ids is None:
+            entities = list(self._entity_repo.list_all())
+        else:
+            entities = [e for e in self._entity_repo.list_all() if e.id in entity_ids]
+
+        data: list[dict[str, Any]] = []
+        total_count = 0
+        total_amount = Decimal("0")
+
+        for entity in entities:
+            transactions = list(
+                self._transaction_repo.list_by_entity(
+                    entity.id,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            )
+
+            entity_count = len(transactions)
+            entity_amount = sum(
+                (txn.total_debits.amount for txn in transactions), Decimal("0")
+            )
+
+            data.append(
+                {
+                    "entity_id": str(entity.id),
+                    "entity_name": entity.name,
+                    "entity_type": entity.entity_type.value,
+                    "transaction_count": entity_count,
+                    "total_amount": entity_amount,
+                }
+            )
+
+            total_count += entity_count
+            total_amount += entity_amount
+
+        return {
+            "report_name": "Transaction Summary by Entity",
+            "date_range": {"start_date": start_date, "end_date": end_date},
+            "data": data,
+            "totals": {
+                "total_transactions": total_count,
+                "total_amount": total_amount,
+            },
+        }
+
+    def dashboard_summary(
+        self,
+        entity_ids: list[UUID] | None,
+        as_of_date: date,
+    ) -> dict[str, Any]:
+        net_worth = self.net_worth_report(entity_ids, as_of_date)
+
+        if entity_ids is None:
+            entities = list(self._entity_repo.list_all())
+            entity_ids = [e.id for e in entities]
+
+        total_accounts = 0
+        total_transactions = 0
+        for entity_id in entity_ids:
+            accounts = list(self._account_repo.list_by_entity(entity_id))
+            total_accounts += len(accounts)
+            transactions = list(self._transaction_repo.list_by_entity(entity_id))
+            total_transactions += len(transactions)
+
+        return {
+            "report_name": "Dashboard Summary",
+            "as_of_date": as_of_date,
+            "data": {
+                "total_entities": len(entity_ids),
+                "total_accounts": total_accounts,
+                "total_transactions": total_transactions,
+                "net_worth": net_worth["totals"]["net_worth"],
+                "total_assets": net_worth["totals"]["total_assets"],
+                "total_liabilities": net_worth["totals"]["total_liabilities"],
+            },
+        }
+
     def export_report(
         self,
         report_data: dict[str, Any],
         output_format: str,
         output_path: str,
     ) -> str:
-        """Export report to specified format (CSV or JSON)."""
         format_lower = output_format.lower()
 
         if format_lower == "json":

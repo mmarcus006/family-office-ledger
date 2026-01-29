@@ -203,3 +203,49 @@ class SessionSummaryResponse(BaseModel):
     rejected: int
     skipped: int
     match_rate: float
+
+
+# Transfer Matching Schemas
+class CreateTransferSessionRequest(BaseModel):
+    entity_ids: list[UUID] | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    date_tolerance_days: int = Field(default=3, ge=1, le=30)
+
+
+class TransferMatchResponse(BaseModel):
+    id: UUID
+    source_transaction_id: UUID
+    target_transaction_id: UUID
+    source_account_id: UUID
+    target_account_id: UUID
+    amount: str
+    transfer_date: date
+    confidence_score: int
+    status: str
+    memo: str
+    confirmed_at: datetime | None
+    created_at: datetime
+
+
+class TransferSessionResponse(BaseModel):
+    id: UUID
+    entity_ids: list[UUID]
+    date_tolerance_days: int
+    status: str
+    created_at: datetime
+    closed_at: datetime | None
+    matches: list[TransferMatchResponse]
+
+
+class TransferMatchListResponse(BaseModel):
+    matches: list[TransferMatchResponse]
+    total: int
+
+
+class TransferSummaryResponse(BaseModel):
+    total_matches: int
+    pending_count: int
+    confirmed_count: int
+    rejected_count: int
+    total_confirmed_amount: str
