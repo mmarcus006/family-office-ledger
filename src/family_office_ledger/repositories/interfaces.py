@@ -4,6 +4,7 @@ from datetime import date
 from uuid import UUID
 
 from family_office_ledger.domain.entities import Account, Entity, Position, Security
+from family_office_ledger.domain.reconciliation import ReconciliationSession
 from family_office_ledger.domain.transactions import TaxLot, Transaction
 
 
@@ -204,4 +205,42 @@ class TaxLotRepository(ABC):
 
     @abstractmethod
     def update(self, lot: TaxLot) -> None:
+        pass
+
+
+class ReconciliationSessionRepository(ABC):
+    """Repository interface for reconciliation sessions.
+
+    Manages persistence of reconciliation sessions and their associated matches.
+    Sessions are eagerly loaded with all matches.
+    """
+
+    @abstractmethod
+    def add(self, session: ReconciliationSession) -> None:
+        """Add a new reconciliation session with all its matches."""
+        pass
+
+    @abstractmethod
+    def get(self, session_id: UUID) -> ReconciliationSession | None:
+        """Get a session by ID, including all matches."""
+        pass
+
+    @abstractmethod
+    def get_pending_for_account(self, account_id: UUID) -> ReconciliationSession | None:
+        """Get the pending session for an account, if one exists."""
+        pass
+
+    @abstractmethod
+    def update(self, session: ReconciliationSession) -> None:
+        """Update a session and all its matches (full replace)."""
+        pass
+
+    @abstractmethod
+    def delete(self, session_id: UUID) -> None:
+        """Delete a session and all its matches (cascade)."""
+        pass
+
+    @abstractmethod
+    def list_by_account(self, account_id: UUID) -> Iterable[ReconciliationSession]:
+        """List all sessions for an account."""
         pass
