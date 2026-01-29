@@ -80,6 +80,27 @@ class CorporateActionType(str, Enum):
     CLASS_CONVERSION = "class_conversion"
 
 
+class TransactionType(str, Enum):
+    INTEREST = "interest"
+    EXPENSE = "expense"
+    TRANSFER = "transfer"
+    TRUST_TRANSFER = "trust_transfer"
+    CONTRIBUTION_DISTRIBUTION = "contribution_distribution"
+    CONTRIBUTION_TO_ENTITY = "contribution_to_entity"
+    LOAN = "loan"
+    LOAN_REPAYMENT = "loan_repayment"
+    PURCHASE_QSBS = "purchase_qsbs"
+    PURCHASE_NON_QSBS = "purchase_non_qsbs"
+    PURCHASE_OZ_FUND = "purchase_oz_fund"
+    SALE_QSBS = "sale_qsbs"
+    SALE_NON_QSBS = "sale_non_qsbs"
+    LIQUIDATION = "liquidation"
+    BROKER_FEES = "broker_fees"
+    RETURN_OF_FUNDS = "return_of_funds"
+    PUBLIC_MARKET = "public_market"
+    UNCLASSIFIED = "unclassified"
+
+
 @dataclass(frozen=True, slots=True)
 class Money:
     amount: Decimal
