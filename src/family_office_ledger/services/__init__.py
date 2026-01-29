@@ -21,6 +21,10 @@ from family_office_ledger.services.lot_matching import (
 )
 from family_office_ledger.services.reconciliation import ReconciliationServiceImpl
 from family_office_ledger.services.reporting import ReportingServiceImpl
+from family_office_ledger.services.transaction_classifier import (
+    SecurityLookup,
+    TransactionClassifier,
+)
 
 __all__ = [
     "AccountNotFoundError",
@@ -38,6 +42,8 @@ __all__ = [
     "ReconciliationSummary",
     "ReportingService",
     "ReportingServiceImpl",
+    "SecurityLookup",
+    "TransactionClassifier",
     "TransactionNotFoundError",
     "UnbalancedTransactionError",
 ]
