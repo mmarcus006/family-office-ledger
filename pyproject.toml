@@ -22,6 +22,7 @@ dependencies = [
     "fastapi>=0.109.0",
     "uvicorn>=0.27.0",
     "psycopg2-binary>=2.9.11",
+    "openpyxl>=3.1.5",
 ]
 
 [project.optional-dependencies]
@@ -101,6 +102,11 @@ exclude_lines = [
     "raise NotImplementedError",
     "if TYPE_CHECKING:",
     "@abstractmethod",
+]
+
+[dependency-groups]
+dev = [
+    "types-openpyxl>=3.1.5.20250919",
 ]
 
 
