@@ -6,9 +6,9 @@ dependencies are not installed.
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 from datetime import date
-import importlib
 from typing import Any
 from uuid import UUID
 

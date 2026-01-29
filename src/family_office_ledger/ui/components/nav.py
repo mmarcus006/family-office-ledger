@@ -25,7 +25,7 @@ def _entity_options(entities: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def header() -> None:
-    with ui.header(elevated=True).classes("bg-white border-b border-slate-200"):
+    with ui.header(elevated=True).classes("bg-white border-b border-slate-200"):  # noqa: SIM117
         with ui.row().classes("w-full items-center justify-between px-4 py-2"):
             ui.label("Atlas Ledger").classes("text-lg font-semibold text-slate-900")
 
@@ -58,12 +58,14 @@ def header() -> None:
 
 
 def sidebar() -> None:
-    with ui.left_drawer(top_corner=True, bottom_corner=True).classes(
-        "bg-white border-r border-slate-200"
+    with (
+        ui.left_drawer(top_corner=True, bottom_corner=True).classes(
+            "bg-white border-r border-slate-200"
+        ),
+        ui.column().classes("w-56 p-3 gap-1"),
     ):
-        with ui.column().classes("w-56 p-3 gap-1"):
-            ui.link("Dashboard", "/").classes(NAV_LINK)
-            ui.link("Entities", "/entities").classes(NAV_LINK)
-            ui.link("Accounts", "/accounts").classes(NAV_LINK)
-            ui.link("Transactions", "/transactions").classes(NAV_LINK)
-            ui.link("Reports", "/reports").classes(NAV_LINK)
+        ui.link("Dashboard", "/").classes(NAV_LINK)
+        ui.link("Entities", "/entities").classes(NAV_LINK)
+        ui.link("Accounts", "/accounts").classes(NAV_LINK)
+        ui.link("Transactions", "/transactions").classes(NAV_LINK)
+        ui.link("Reports", "/reports").classes(NAV_LINK)

@@ -10,6 +10,8 @@ from typing import Any
 from nicegui import ui  # pyright: ignore[reportMissingImports]
 
 from family_office_ledger.ui.api_client import APIError, api
+from family_office_ledger.ui.components.modals import form_dialog
+from family_office_ledger.ui.components.tables import data_table
 from family_office_ledger.ui.constants import (
     ACCOUNT_SUB_TYPES,
     ACCOUNT_TYPES,
@@ -17,8 +19,6 @@ from family_office_ledger.ui.constants import (
     CARD,
     CARD_PAD,
 )
-from family_office_ledger.ui.components.modals import form_dialog
-from family_office_ledger.ui.components.tables import data_table
 from family_office_ledger.ui.state import state
 
 
@@ -84,69 +84,67 @@ def render() -> None:
             rows = grouped.get(group_name)
             if not rows:
                 continue
-            with container:
-                with ui.card().classes(f"{CARD} {CARD_PAD} w-full"):
-                    ui.label(group_name.capitalize()).classes(
-                        "text-sm font-semibold text-slate-700"
-                    )
-                    data_table(columns=columns, rows=rows, row_key="id")
-
-    with dialog:
-        with card:
-            name_in = ui.input("Name").props("autofocus").classes("w-full")
-            atype = (
-                ui.select(
-                    options={o["value"]: o["label"] for o in ACCOUNT_TYPES},
-                    label="Type",
-                    value="asset",
+            with container, ui.card().classes(f"{CARD} {CARD_PAD} w-full"):
+                ui.label(group_name.capitalize()).classes(
+                    "text-sm font-semibold text-slate-700"
                 )
-                .props("dense outlined")
-                .classes("w-full")
+                data_table(columns=columns, rows=rows, row_key="id")
+
+    with dialog, card:
+        name_in = ui.input("Name").props("autofocus").classes("w-full")
+        atype = (
+            ui.select(
+                options={o["value"]: o["label"] for o in ACCOUNT_TYPES},
+                label="Type",
+                value="asset",
             )
-            sub_type = (
-                ui.select(
-                    options={o["value"]: o["label"] for o in ACCOUNT_SUB_TYPES},
-                    label="Sub-Type",
-                    value="checking",
+            .props("dense outlined")
+            .classes("w-full")
+        )
+        sub_type = (
+            ui.select(
+                options={o["value"]: o["label"] for o in ACCOUNT_SUB_TYPES},
+                label="Sub-Type",
+                value="checking",
+            )
+            .props("dense outlined")
+            .classes("w-full")
+        )
+        currency = ui.input("Currency").props("dense").classes("w-full")
+        currency.value = "USD"
+
+        error = ui.label("").classes("text-rose-700")
+
+        async def submit() -> None:
+            if api is None:
+                return
+            entity_id = state.selected_entity_id
+            if entity_id is None:
+                error.text = "Select an entity in the header first"
+                error.update()
+                return
+            name = str(name_in.value or "").strip()
+            if not name:
+                error.text = "Name is required"
+                error.update()
+                return
+            try:
+                await api.create_account(
+                    name=name,
+                    entity_id=entity_id,
+                    account_type=str(atype.value),
+                    sub_type=str(sub_type.value),
+                    currency=str(currency.value or "USD").upper(),
                 )
-                .props("dense outlined")
-                .classes("w-full")
-            )
-            currency = ui.input("Currency").props("dense").classes("w-full")
-            currency.value = "USD"
+            except APIError as e:
+                error.text = e.detail
+                error.update()
+                return
+            dialog.close()
+            await refresh()
 
-            error = ui.label("").classes("text-rose-700")
-
-            async def submit() -> None:
-                if api is None:
-                    return
-                entity_id = state.selected_entity_id
-                if entity_id is None:
-                    error.text = "Select an entity in the header first"
-                    error.update()
-                    return
-                name = str(name_in.value or "").strip()
-                if not name:
-                    error.text = "Name is required"
-                    error.update()
-                    return
-                try:
-                    await api.create_account(
-                        name=name,
-                        entity_id=entity_id,
-                        account_type=str(atype.value),
-                        sub_type=str(sub_type.value),
-                        currency=str(currency.value or "USD").upper(),
-                    )
-                except APIError as e:
-                    error.text = e.detail
-                    error.update()
-                    return
-                dialog.close()
-                await refresh()
-
-            with ui.row().classes("w-full justify-end gap-2 pt-2"):
-                ui.button("Cancel", on_click=dialog.close).props("flat")
-                ui.button("Create Account", on_click=submit).classes(BUTTON_PRIMARY)
+        with ui.row().classes("w-full justify-end gap-2 pt-2"):
+            ui.button("Cancel", on_click=dialog.close).props("flat")
+            ui.button("Create Account", on_click=submit).classes(BUTTON_PRIMARY)
 
     ui.timer(0.05, refresh, once=True)

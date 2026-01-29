@@ -7,7 +7,6 @@ from __future__ import annotations
 
 from typing import Final
 
-
 ENTITY_TYPES: Final[list[dict[str, str]]] = [
     {"value": "llc", "label": "LLC"},
     {"value": "trust", "label": "Trust"},

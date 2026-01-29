@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
 
 from nicegui import ui  # pyright: ignore[reportMissingImports]
 
@@ -101,7 +100,7 @@ def render() -> None:
                 if data:
                     columns = [
                         {"name": k, "label": k.replace("_", " ").title(), "field": k}
-                        for k in data[0].keys()
+                        for k in data[0]
                     ]
                 else:
                     columns = []
@@ -131,10 +130,10 @@ def render() -> None:
     ui.timer(0.05, load_entities, once=True)
 
     with ui.row().classes("w-full gap-2 items-end"):
-        report_type
-        asof_in
-        entity_multi
+        report_type  # noqa: B018 - NiceGUI element placement
+        asof_in  # noqa: B018 - NiceGUI element placement
+        entity_multi  # noqa: B018 - NiceGUI element placement
         ui.button("Generate", on_click=generate).classes(BUTTON_SECONDARY)
 
-    error
-    output
+    error  # noqa: B018 - NiceGUI element placement
+    output  # noqa: B018 - NiceGUI element placement

@@ -90,12 +90,12 @@ def render() -> None:
             )
 
     with ui.row().classes("w-full items-end gap-2"):
-        asof_in
+        asof_in  # noqa: B018 - NiceGUI element placement
         ui.button("Refresh", on_click=refresh).props("dense")
 
     with ui.column().classes("w-full gap-3 pt-3"):
-        cards
-        recent_card
-        balances_card
+        cards  # noqa: B018 - NiceGUI element placement
+        recent_card  # noqa: B018 - NiceGUI element placement
+        balances_card  # noqa: B018 - NiceGUI element placement
 
     ui.timer(0.05, refresh, once=True)

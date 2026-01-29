@@ -49,28 +49,28 @@ def create_ui() -> None:
     def shell(page_title: str, render_fn: Any) -> None:
         header()
         sidebar()
-        with ui.column().classes("atlas-page"):
+        with ui.column().classes("atlas-page"):  # noqa: SIM117
             with ui.column().classes("max-w-[1200px] w-full mx-auto p-6 gap-4"):
                 ui.label(page_title).classes("sr-only")
                 render_fn()
 
-    @ui.page("/")  # type: ignore[misc,untyped-decorator]
+    @ui.page("/")  # type: ignore[untyped-decorator]
     def index() -> None:
         shell("Dashboard", dashboard.render)
 
-    @ui.page("/entities")  # type: ignore[misc,untyped-decorator]
+    @ui.page("/entities")  # type: ignore[untyped-decorator]
     def entities_page() -> None:
         shell("Entities", entities.render)
 
-    @ui.page("/accounts")  # type: ignore[misc,untyped-decorator]
+    @ui.page("/accounts")  # type: ignore[untyped-decorator]
     def accounts_page() -> None:
         shell("Accounts", accounts.render)
 
-    @ui.page("/transactions")  # type: ignore[misc,untyped-decorator]
+    @ui.page("/transactions")  # type: ignore[untyped-decorator]
     def transactions_page() -> None:
         shell("Transactions", transactions.render)
 
-    @ui.page("/reports")  # type: ignore[misc,untyped-decorator]
+    @ui.page("/reports")  # type: ignore[untyped-decorator]
     def reports_page() -> None:
         shell("Reports", reports.render)
 

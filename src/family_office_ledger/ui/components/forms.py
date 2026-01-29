@@ -48,5 +48,10 @@ def date_field(label: str) -> Any:
             )
         menu: Any
         with ui.menu() as menu:
-            ui.date(on_change=lambda e: (inp.set_value(e.value), menu.close()))
+
+            def _on_date_change(e: Any) -> None:
+                inp.set_value(e.value)
+                menu.close()
+
+            ui.date(on_change=_on_date_change)
     return inp
