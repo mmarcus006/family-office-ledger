@@ -7,6 +7,7 @@ from family_office_ledger.api.routes import (
     audit_router,
     currency_router,
     entity_router,
+    expense_router,
     health_router,
     portfolio_router,
     qsbs_router,
@@ -15,6 +16,7 @@ from family_office_ledger.api.routes import (
     tax_router,
     transaction_router,
     transfer_router,
+    vendor_router,
 )
 from family_office_ledger.repositories.sqlite import SQLiteDatabase
 
@@ -64,6 +66,8 @@ def create_app() -> FastAPI:
     app.include_router(portfolio_router)
     app.include_router(audit_router)
     app.include_router(currency_router)
+    app.include_router(expense_router)
+    app.include_router(vendor_router)
 
     return app
 

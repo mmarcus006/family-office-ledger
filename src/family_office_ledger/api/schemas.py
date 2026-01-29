@@ -520,3 +520,106 @@ class CurrencyConvertResponse(BaseModel):
     converted_currency: str
     rate_used: str
     as_of_date: date
+
+
+# Vendor Schemas
+class VendorCreate(BaseModel):
+    """Schema for creating a vendor."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(..., min_length=1)
+    category: str | None = None
+    tax_id: str | None = None
+    is_1099_eligible: bool = False
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    notes: str = ""
+
+
+class VendorUpdate(BaseModel):
+    """Schema for updating a vendor."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str | None = None
+    category: str | None = None
+    tax_id: str | None = None
+    is_1099_eligible: bool | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    notes: str | None = None
+
+
+class VendorResponse(BaseModel):
+    """Schema for vendor response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    category: str | None
+    tax_id: str | None
+    is_1099_eligible: bool
+    is_active: bool
+    contact_email: str | None
+    contact_phone: str | None
+    notes: str
+    created_at: datetime
+
+
+class VendorListResponse(BaseModel):
+    """Schema for paginated vendor list response."""
+
+    vendors: list[VendorResponse]
+    total: int
+
+
+# Expense Schemas
+class CategorizeTransactionRequest(BaseModel):
+    """Schema for categorizing a transaction."""
+
+    category: str | None = None
+    tags: list[str] | None = None
+    vendor_id: UUID | None = None
+
+
+class ExpenseSummaryResponse(BaseModel):
+    """Schema for expense summary response."""
+
+    total_expenses: str
+    transaction_count: int
+    category_breakdown: dict[str, str]
+    start_date: date
+    end_date: date
+
+
+class ExpenseByCategoryResponse(BaseModel):
+    """Schema for expenses grouped by category."""
+
+    categories: dict[str, str]
+    total: str
+
+
+class ExpenseByVendorResponse(BaseModel):
+    """Schema for expenses grouped by vendor."""
+
+    vendors: dict[str, str]  # vendor_id -> amount
+    total: str
+
+
+class RecurringExpenseResponse(BaseModel):
+    """Schema for recurring expense detection response."""
+
+    vendor_id: UUID
+    frequency: str
+    amount: str
+    occurrence_count: int
+    last_date: date
+
+
+class RecurringExpenseListResponse(BaseModel):
+    """Schema for list of recurring expenses."""
+
+    recurring_expenses: list[RecurringExpenseResponse]
+    total: int

@@ -16,6 +16,7 @@ from family_office_ledger.api.schemas import (
     AuditListResponse,
     AuditSummaryResponse,
     BalanceSheetResponse,
+    CategorizeTransactionRequest,
     ConcentrationReportResponse,
     CreateSessionRequest,
     CreateTransferSessionRequest,
@@ -27,6 +28,9 @@ from family_office_ledger.api.schemas import (
     ExchangeRateCreate,
     ExchangeRateListResponse,
     ExchangeRateResponse,
+    ExpenseByCategoryResponse,
+    ExpenseByVendorResponse,
+    ExpenseSummaryResponse,
     Form8949EntryResponse,
     Form8949PartResponse,
     Form8949Response,
@@ -41,6 +45,8 @@ from family_office_ledger.api.schemas import (
     PortfolioSummaryResponse,
     QSBSHoldingResponse,
     QSBSSummaryResponse,
+    RecurringExpenseListResponse,
+    RecurringExpenseResponse,
     ReportResponse,
     ScheduleDResponse,
     SecurityResponse,
@@ -54,6 +60,10 @@ from family_office_ledger.api.schemas import (
     TransferMatchResponse,
     TransferSessionResponse,
     TransferSummaryResponse,
+    VendorCreate,
+    VendorListResponse,
+    VendorResponse,
+    VendorUpdate,
 )
 from family_office_ledger.domain.audit import AuditAction, AuditEntityType
 from family_office_ledger.domain.entities import Account, Entity
@@ -91,12 +101,15 @@ from family_office_ledger.repositories.sqlite import (
     SQLiteSecurityRepository,
     SQLiteTaxLotRepository,
     SQLiteTransactionRepository,
+    SQLiteVendorRepository,
 )
+from family_office_ledger.domain.vendors import Vendor
 from family_office_ledger.services.audit import AuditService
 from family_office_ledger.services.currency import (
     CurrencyServiceImpl,
     ExchangeRateNotFoundError,
 )
+from family_office_ledger.services.expense import ExpenseServiceImpl
 from family_office_ledger.services.interfaces import LedgerService, ReportingService
 from family_office_ledger.services.ledger import (
     LedgerServiceImpl,
@@ -134,6 +147,8 @@ tax_router = APIRouter(prefix="/tax", tags=["tax"])
 portfolio_router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 audit_router = APIRouter(prefix="/audit", tags=["audit"])
 currency_router = APIRouter(prefix="/currency", tags=["currency"])
+expense_router = APIRouter(prefix="/expenses", tags=["expenses"])
+vendor_router = APIRouter(prefix="/vendors", tags=["vendors"])
 
 
 # Dependency injection functions
@@ -1901,4 +1916,281 @@ def convert_currency(
         converted_currency=payload.to_currency,
         rate_used=rate_str,
         as_of_date=payload.as_of_date,
+    )
+
+
+def get_expense_service(db: SQLiteDatabase) -> ExpenseServiceImpl:
+    transaction_repo = SQLiteTransactionRepository(db)
+    account_repo = SQLiteAccountRepository(db)
+    vendor_repo = SQLiteVendorRepository(db)
+    return ExpenseServiceImpl(
+        transaction_repo=transaction_repo,
+        account_repo=account_repo,
+        vendor_repo=vendor_repo,
+    )
+
+
+def get_vendor_repository(db: SQLiteDatabase) -> SQLiteVendorRepository:
+    return SQLiteVendorRepository(db)
+
+
+def _vendor_to_response(vendor: Vendor) -> VendorResponse:
+    return VendorResponse(
+        id=vendor.id,
+        name=vendor.name,
+        category=vendor.category,
+        tax_id=vendor.tax_id,
+        is_1099_eligible=vendor.is_1099_eligible,
+        is_active=vendor.is_active,
+        contact_email=vendor.contact_email,
+        contact_phone=vendor.contact_phone,
+        notes=vendor.notes,
+        created_at=vendor.created_at,
+    )
+
+
+@vendor_router.post(
+    "",
+    response_model=VendorResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_vendor(
+    payload: VendorCreate,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> VendorResponse:
+    vendor_repo = get_vendor_repository(db)
+
+    vendor = Vendor(
+        name=payload.name,
+        category=payload.category,
+        tax_id=payload.tax_id,
+        is_1099_eligible=payload.is_1099_eligible,
+        contact_email=payload.contact_email,
+        contact_phone=payload.contact_phone,
+        notes=payload.notes,
+    )
+
+    vendor_repo.add(vendor)
+    return _vendor_to_response(vendor)
+
+
+@vendor_router.get("", response_model=VendorListResponse)
+def list_vendors(
+    db: Annotated[SQLiteDatabase, Depends()],
+    include_inactive: bool = Query(default=False),
+) -> VendorListResponse:
+    vendor_repo = get_vendor_repository(db)
+    vendors = list(vendor_repo.list_all(include_inactive=include_inactive))
+    return VendorListResponse(
+        vendors=[_vendor_to_response(v) for v in vendors],
+        total=len(vendors),
+    )
+
+
+@vendor_router.get("/search", response_model=VendorListResponse)
+def search_vendors(
+    db: Annotated[SQLiteDatabase, Depends()],
+    name: str = Query(..., min_length=1),
+) -> VendorListResponse:
+    vendor_repo = get_vendor_repository(db)
+    vendors = list(vendor_repo.search_by_name(name))
+    return VendorListResponse(
+        vendors=[_vendor_to_response(v) for v in vendors],
+        total=len(vendors),
+    )
+
+
+@vendor_router.get("/{vendor_id}", response_model=VendorResponse)
+def get_vendor(
+    vendor_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> VendorResponse:
+    vendor_repo = get_vendor_repository(db)
+    vendor = vendor_repo.get(vendor_id)
+    if vendor is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Vendor {vendor_id} not found",
+        )
+    return _vendor_to_response(vendor)
+
+
+@vendor_router.put("/{vendor_id}", response_model=VendorResponse)
+def update_vendor(
+    vendor_id: UUID,
+    payload: VendorUpdate,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> VendorResponse:
+    vendor_repo = get_vendor_repository(db)
+    vendor = vendor_repo.get(vendor_id)
+    if vendor is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Vendor {vendor_id} not found",
+        )
+
+    if payload.name is not None:
+        vendor.name = payload.name
+    if payload.category is not None:
+        vendor.category = payload.category
+    if payload.tax_id is not None:
+        vendor.tax_id = payload.tax_id
+    if payload.is_1099_eligible is not None:
+        vendor.is_1099_eligible = payload.is_1099_eligible
+    if payload.contact_email is not None:
+        vendor.contact_email = payload.contact_email
+    if payload.contact_phone is not None:
+        vendor.contact_phone = payload.contact_phone
+    if payload.notes is not None:
+        vendor.notes = payload.notes
+
+    vendor_repo.update(vendor)
+    return _vendor_to_response(vendor)
+
+
+@vendor_router.delete("/{vendor_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_vendor(
+    vendor_id: UUID,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> None:
+    vendor_repo = get_vendor_repository(db)
+    vendor = vendor_repo.get(vendor_id)
+    if vendor is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Vendor {vendor_id} not found",
+        )
+    vendor_repo.delete(vendor_id)
+
+
+@expense_router.post(
+    "/transactions/{txn_id}/categorize",
+    response_model=TransactionResponse,
+)
+def categorize_transaction(
+    txn_id: UUID,
+    payload: CategorizeTransactionRequest,
+    db: Annotated[SQLiteDatabase, Depends()],
+) -> TransactionResponse:
+    expense_service = get_expense_service(db)
+
+    try:
+        txn = expense_service.categorize_transaction(
+            transaction_id=txn_id,
+            category=payload.category,
+            tags=payload.tags,
+            vendor_id=payload.vendor_id,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from e
+
+    return _transaction_to_response(txn)
+
+
+@expense_router.get("/summary", response_model=ExpenseSummaryResponse)
+def get_expense_summary(
+    db: Annotated[SQLiteDatabase, Depends()],
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    entity_ids: list[UUID] | None = Query(default=None),
+) -> ExpenseSummaryResponse:
+    expense_service = get_expense_service(db)
+
+    summary = expense_service.get_expense_summary(
+        entity_ids=entity_ids,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    by_category = expense_service.get_expenses_by_category(
+        entity_ids=entity_ids,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    return ExpenseSummaryResponse(
+        total_expenses=str(summary["total_expenses"]),
+        transaction_count=summary["transaction_count"],
+        category_breakdown={
+            cat: str(amount.amount) for cat, amount in by_category.items()
+        },
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+@expense_router.get("/by-category", response_model=ExpenseByCategoryResponse)
+def get_expenses_by_category(
+    db: Annotated[SQLiteDatabase, Depends()],
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    entity_ids: list[UUID] | None = Query(default=None),
+) -> ExpenseByCategoryResponse:
+    expense_service = get_expense_service(db)
+
+    by_category = expense_service.get_expenses_by_category(
+        entity_ids=entity_ids,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    total = sum((m.amount for m in by_category.values()), Decimal("0"))
+
+    return ExpenseByCategoryResponse(
+        categories={cat: str(amount.amount) for cat, amount in by_category.items()},
+        total=str(total),
+    )
+
+
+@expense_router.get("/by-vendor", response_model=ExpenseByVendorResponse)
+def get_expenses_by_vendor(
+    db: Annotated[SQLiteDatabase, Depends()],
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    entity_ids: list[UUID] | None = Query(default=None),
+) -> ExpenseByVendorResponse:
+    expense_service = get_expense_service(db)
+
+    by_vendor = expense_service.get_expenses_by_vendor(
+        entity_ids=entity_ids,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    total = sum((m.amount for m in by_vendor.values()), Decimal("0"))
+
+    return ExpenseByVendorResponse(
+        vendors={str(vid): str(amount.amount) for vid, amount in by_vendor.items()},
+        total=str(total),
+    )
+
+
+@expense_router.get("/recurring", response_model=RecurringExpenseListResponse)
+def get_recurring_expenses(
+    db: Annotated[SQLiteDatabase, Depends()],
+    entity_id: UUID = Query(...),
+    lookback_months: int = Query(default=3, ge=1, le=24),
+) -> RecurringExpenseListResponse:
+    expense_service = get_expense_service(db)
+
+    recurring = expense_service.detect_recurring_expenses(
+        entity_id=entity_id,
+        lookback_months=lookback_months,
+    )
+
+    return RecurringExpenseListResponse(
+        recurring_expenses=[
+            RecurringExpenseResponse(
+                vendor_id=r["vendor_id"],
+                frequency=r["frequency"],
+                amount=str(r["amount"].amount),
+                occurrence_count=r["occurrence_count"],
+                last_date=r["last_date"],
+            )
+            for r in recurring
+        ],
+        total=len(recurring),
     )
