@@ -17,7 +17,10 @@ from family_office_ledger.repositories.sqlite import (
     SQLiteSecurityRepository,
     SQLiteTaxLotRepository,
     SQLiteTransactionRepository,
+    SQLiteVendorRepository,
 )
+from family_office_ledger.services.expense import ExpenseServiceImpl
+from family_office_ledger.domain.vendors import Vendor
 from family_office_ledger.services.ingestion import IngestionService
 from family_office_ledger.services.ledger import LedgerServiceImpl
 from family_office_ledger.services.lot_matching import LotMatchingServiceImpl
@@ -1356,6 +1359,405 @@ def cmd_currency_convert(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_expense_categorize(args: argparse.Namespace) -> int:
+    """Categorize a transaction with expense category and tags."""
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        txn_id = UUID(args.txn_id)
+    except ValueError:
+        print(f"Error: Invalid transaction ID: {args.txn_id}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        vendor_repo = SQLiteVendorRepository(db)
+        service = ExpenseServiceImpl(transaction_repo, account_repo, vendor_repo)
+
+        tags = args.tags.split(",") if args.tags else None
+        txn = service.categorize_transaction(txn_id, category=args.category, tags=tags)
+        print(f"Transaction {txn_id} categorized")
+        print(f"  Category: {txn.category or 'none'}")
+        print(f"  Tags: {', '.join(txn.tags) if txn.tags else 'none'}")
+        return 0
+
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_expense_summary(args: argparse.Namespace) -> int:
+    """Show expense summary for entity and date range."""
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        entity_ids = None
+        if args.entity_id:
+            entity_ids = [UUID(args.entity_id)]
+
+        start_date = dt.strptime(args.start_date, "%Y-%m-%d").date()
+        end_date = dt.strptime(args.end_date, "%Y-%m-%d").date()
+
+        db = SQLiteDatabase(str(db_path))
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        vendor_repo = SQLiteVendorRepository(db)
+        service = ExpenseServiceImpl(transaction_repo, account_repo, vendor_repo)
+
+        summary = service.get_expense_summary(entity_ids, start_date, end_date)
+
+        print("Expense Summary")
+        print("=" * 50)
+        print(f"  Date Range: {start_date} to {end_date}")
+        print(f"  Total Expenses: ${summary['total_expenses']:,.2f}")
+        print(f"  Transaction Count: {summary['transaction_count']}")
+        return 0
+
+    except ValueError as e:
+        print(f"Error: Invalid input: {e}")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_expense_by_category(args: argparse.Namespace) -> int:
+    """Show expenses grouped by category."""
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        entity_ids = None
+        if args.entity_id:
+            entity_ids = [UUID(args.entity_id)]
+
+        start_date = dt.strptime(args.start_date, "%Y-%m-%d").date()
+        end_date = dt.strptime(args.end_date, "%Y-%m-%d").date()
+
+        db = SQLiteDatabase(str(db_path))
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        vendor_repo = SQLiteVendorRepository(db)
+        service = ExpenseServiceImpl(transaction_repo, account_repo, vendor_repo)
+
+        by_category = service.get_expenses_by_category(entity_ids, start_date, end_date)
+
+        print("Expenses by Category")
+        print("=" * 50)
+        print(f"  Date Range: {start_date} to {end_date}")
+        print(f"\n{'Category':<25} {'Amount':>15}")
+        print("-" * 42)
+
+        total = Decimal("0")
+        for category, money in sorted(by_category.items()):
+            print(f"{category:<25} ${money.amount:>14,.2f}")
+            total += money.amount
+
+        print("-" * 42)
+        print(f"{'Total':<25} ${total:>14,.2f}")
+        return 0
+
+    except ValueError as e:
+        print(f"Error: Invalid input: {e}")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_expense_by_vendor(args: argparse.Namespace) -> int:
+    """Show expenses grouped by vendor."""
+    from datetime import datetime as dt
+
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        entity_ids = None
+        if args.entity_id:
+            entity_ids = [UUID(args.entity_id)]
+
+        start_date = dt.strptime(args.start_date, "%Y-%m-%d").date()
+        end_date = dt.strptime(args.end_date, "%Y-%m-%d").date()
+
+        db = SQLiteDatabase(str(db_path))
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        vendor_repo = SQLiteVendorRepository(db)
+        service = ExpenseServiceImpl(transaction_repo, account_repo, vendor_repo)
+
+        by_vendor = service.get_expenses_by_vendor(entity_ids, start_date, end_date)
+
+        print("Expenses by Vendor")
+        print("=" * 70)
+        print(f"  Date Range: {start_date} to {end_date}")
+        print(f"\n{'Vendor ID':<40} {'Amount':>15}")
+        print("-" * 57)
+
+        total = Decimal("0")
+        for vendor_id, money in by_vendor.items():
+            vendor = vendor_repo.get(vendor_id)
+            name = vendor.name if vendor else str(vendor_id)[:20]
+            print(f"{name:<40} ${money.amount:>14,.2f}")
+            total += money.amount
+
+        print("-" * 57)
+        print(f"{'Total':<40} ${total:>14,.2f}")
+        return 0
+
+    except ValueError as e:
+        print(f"Error: Invalid input: {e}")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_expense_recurring(args: argparse.Namespace) -> int:
+    """Detect recurring expenses for an entity."""
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        entity_id = UUID(args.entity_id)
+    except ValueError:
+        print(f"Error: Invalid entity ID: {args.entity_id}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        transaction_repo = SQLiteTransactionRepository(db)
+        account_repo = SQLiteAccountRepository(db)
+        vendor_repo = SQLiteVendorRepository(db)
+        service = ExpenseServiceImpl(transaction_repo, account_repo, vendor_repo)
+
+        lookback = args.lookback_months if args.lookback_months else 3
+        recurring = service.detect_recurring_expenses(entity_id, lookback)
+
+        print("Recurring Expenses")
+        print("=" * 80)
+        print(f"  Lookback: {lookback} months")
+        print(
+            f"\n{'Vendor':<30} {'Frequency':<12} {'Avg Amount':>12} {'Occurrences':>12}"
+        )
+        print("-" * 70)
+
+        for item in recurring:
+            vendor = vendor_repo.get(item["vendor_id"])
+            name = vendor.name[:28] if vendor else str(item["vendor_id"])[:28]
+            print(
+                f"{name:<30} {item['frequency']:<12} "
+                f"${item['amount'].amount:>11,.2f} {item['occurrence_count']:>12}"
+            )
+
+        if not recurring:
+            print("  No recurring expenses detected")
+
+        return 0
+
+    except ValueError as e:
+        print(f"Error: {e}")
+        return 1
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_vendor_add(args: argparse.Namespace) -> int:
+    """Add a new vendor."""
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        vendor_repo = SQLiteVendorRepository(db)
+
+        vendor = Vendor(
+            name=args.name,
+            category=args.category,
+            tax_id=args.tax_id,
+            is_1099_eligible=args.is_1099,
+        )
+        vendor_repo.add(vendor)
+
+        print(f"Vendor created: {vendor.id}")
+        print(f"  Name: {vendor.name}")
+        if vendor.category:
+            print(f"  Category: {vendor.category}")
+        if vendor.tax_id:
+            print(f"  Tax ID: {vendor.tax_id}")
+        if vendor.is_1099_eligible:
+            print(f"  1099 Eligible: Yes")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_vendor_list(args: argparse.Namespace) -> int:
+    """List vendors."""
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        vendor_repo = SQLiteVendorRepository(db)
+
+        if args.category:
+            vendors = list(vendor_repo.list_by_category(args.category))
+        else:
+            vendors = list(vendor_repo.list_all(include_inactive=args.include_inactive))
+
+        print(f"{'ID':<40} {'Name':<30} {'Category':<15} {'1099':>5}")
+        print("-" * 95)
+
+        for vendor in vendors:
+            cat = vendor.category or "-"
+            is_1099 = "Yes" if vendor.is_1099_eligible else "No"
+            status = "" if vendor.is_active else " [inactive]"
+            print(
+                f"{str(vendor.id):<40} {vendor.name[:28]:<30} {cat:<15} {is_1099:>5}{status}"
+            )
+
+        print(f"\nTotal: {len(vendors)} vendor(s)")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_vendor_get(args: argparse.Namespace) -> int:
+    """Get vendor details."""
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        vendor_id = UUID(args.id)
+    except ValueError:
+        print(f"Error: Invalid vendor ID: {args.id}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        vendor_repo = SQLiteVendorRepository(db)
+
+        vendor = vendor_repo.get(vendor_id)
+        if vendor is None:
+            print("Error: Vendor not found")
+            return 1
+
+        print("Vendor Details")
+        print("=" * 50)
+        print(f"  ID: {vendor.id}")
+        print(f"  Name: {vendor.name}")
+        print(f"  Category: {vendor.category or 'N/A'}")
+        print(f"  Tax ID: {vendor.tax_id or 'N/A'}")
+        print(f"  1099 Eligible: {'Yes' if vendor.is_1099_eligible else 'No'}")
+        print(f"  Status: {'Active' if vendor.is_active else 'Inactive'}")
+        print(f"  Created: {vendor.created_at}")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_vendor_update(args: argparse.Namespace) -> int:
+    """Update vendor details."""
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        vendor_id = UUID(args.id)
+    except ValueError:
+        print(f"Error: Invalid vendor ID: {args.id}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        vendor_repo = SQLiteVendorRepository(db)
+
+        vendor = vendor_repo.get(vendor_id)
+        if vendor is None:
+            print("Error: Vendor not found")
+            return 1
+
+        if args.name:
+            vendor.name = args.name
+        if args.category:
+            vendor.category = args.category
+        if args.deactivate:
+            vendor.deactivate()
+
+        vendor_repo.update(vendor)
+        print(f"Vendor {vendor_id} updated")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+def cmd_vendor_search(args: argparse.Namespace) -> int:
+    """Search vendors by name."""
+    db_path = Path(args.database) if args.database else get_default_db_path()
+    if not db_path.exists():
+        print(f"Error: Database not found at {db_path}")
+        return 1
+
+    try:
+        db = SQLiteDatabase(str(db_path))
+        vendor_repo = SQLiteVendorRepository(db)
+
+        vendors = list(vendor_repo.search_by_name(args.name))
+
+        print(f"{'ID':<40} {'Name':<30} {'Category':<15} {'1099':>5}")
+        print("-" * 95)
+
+        for vendor in vendors:
+            cat = vendor.category or "-"
+            is_1099 = "Yes" if vendor.is_1099_eligible else "No"
+            print(f"{str(vendor.id):<40} {vendor.name[:28]:<30} {cat:<15} {is_1099:>5}")
+
+        print(f"\nFound: {len(vendors)} vendor(s)")
+        return 0
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="fol",
@@ -1792,6 +2194,126 @@ def main(argv: list[str] | None = None) -> int:
     )
     convert_parser.set_defaults(func=cmd_currency_convert)
 
+    # expense command group
+    expense_parser = subparsers.add_parser(
+        "expense", help="Expense management commands"
+    )
+    expense_subparsers = expense_parser.add_subparsers(
+        dest="expense_command", help="Expense subcommands"
+    )
+
+    # expense categorize
+    expense_categorize_parser = expense_subparsers.add_parser(
+        "categorize", help="Categorize a transaction"
+    )
+    expense_categorize_parser.add_argument(
+        "--txn-id", required=True, help="Transaction ID to categorize"
+    )
+    expense_categorize_parser.add_argument("--category", help="Expense category")
+    expense_categorize_parser.add_argument(
+        "--tags", help="Comma-separated tags (e.g., 'tax,q1')"
+    )
+    expense_categorize_parser.set_defaults(func=cmd_expense_categorize)
+
+    # expense summary
+    expense_summary_parser = expense_subparsers.add_parser(
+        "summary", help="Show expense summary"
+    )
+    expense_summary_parser.add_argument("--entity-id", help="Entity ID (optional)")
+    expense_summary_parser.add_argument(
+        "--start-date", required=True, help="Start date (YYYY-MM-DD)"
+    )
+    expense_summary_parser.add_argument(
+        "--end-date", required=True, help="End date (YYYY-MM-DD)"
+    )
+    expense_summary_parser.set_defaults(func=cmd_expense_summary)
+
+    # expense by-category
+    expense_by_category_parser = expense_subparsers.add_parser(
+        "by-category", help="Show expenses grouped by category"
+    )
+    expense_by_category_parser.add_argument("--entity-id", help="Entity ID (optional)")
+    expense_by_category_parser.add_argument(
+        "--start-date", required=True, help="Start date (YYYY-MM-DD)"
+    )
+    expense_by_category_parser.add_argument(
+        "--end-date", required=True, help="End date (YYYY-MM-DD)"
+    )
+    expense_by_category_parser.set_defaults(func=cmd_expense_by_category)
+
+    # expense by-vendor
+    expense_by_vendor_parser = expense_subparsers.add_parser(
+        "by-vendor", help="Show expenses grouped by vendor"
+    )
+    expense_by_vendor_parser.add_argument("--entity-id", help="Entity ID (optional)")
+    expense_by_vendor_parser.add_argument(
+        "--start-date", required=True, help="Start date (YYYY-MM-DD)"
+    )
+    expense_by_vendor_parser.add_argument(
+        "--end-date", required=True, help="End date (YYYY-MM-DD)"
+    )
+    expense_by_vendor_parser.set_defaults(func=cmd_expense_by_vendor)
+
+    # expense recurring
+    expense_recurring_parser = expense_subparsers.add_parser(
+        "recurring", help="Detect recurring expenses"
+    )
+    expense_recurring_parser.add_argument(
+        "--entity-id", required=True, help="Entity ID"
+    )
+    expense_recurring_parser.add_argument(
+        "--lookback-months", type=int, default=3, help="Lookback period in months"
+    )
+    expense_recurring_parser.set_defaults(func=cmd_expense_recurring)
+
+    # vendor command group
+    vendor_parser = subparsers.add_parser("vendor", help="Vendor management commands")
+    vendor_subparsers = vendor_parser.add_subparsers(
+        dest="vendor_command", help="Vendor subcommands"
+    )
+
+    # vendor add
+    vendor_add_parser = vendor_subparsers.add_parser("add", help="Add a new vendor")
+    vendor_add_parser.add_argument("--name", required=True, help="Vendor name")
+    vendor_add_parser.add_argument("--category", help="Vendor category")
+    vendor_add_parser.add_argument("--tax-id", help="Tax ID (e.g., '12-3456789')")
+    vendor_add_parser.add_argument(
+        "--1099", dest="is_1099", action="store_true", help="Mark as 1099-eligible"
+    )
+    vendor_add_parser.set_defaults(func=cmd_vendor_add)
+
+    # vendor list
+    vendor_list_parser = vendor_subparsers.add_parser("list", help="List vendors")
+    vendor_list_parser.add_argument(
+        "--include-inactive", action="store_true", help="Include inactive vendors"
+    )
+    vendor_list_parser.add_argument("--category", help="Filter by category")
+    vendor_list_parser.set_defaults(func=cmd_vendor_list)
+
+    # vendor get
+    vendor_get_parser = vendor_subparsers.add_parser("get", help="Get vendor details")
+    vendor_get_parser.add_argument("--id", required=True, help="Vendor ID")
+    vendor_get_parser.set_defaults(func=cmd_vendor_get)
+
+    # vendor update
+    vendor_update_parser = vendor_subparsers.add_parser(
+        "update", help="Update vendor details"
+    )
+    vendor_update_parser.add_argument("--id", required=True, help="Vendor ID")
+    vendor_update_parser.add_argument("--name", help="New name")
+    vendor_update_parser.add_argument("--category", help="New category")
+    vendor_update_parser.add_argument(
+        "--deactivate", action="store_true", help="Deactivate the vendor"
+    )
+    vendor_update_parser.set_defaults(func=cmd_vendor_update)
+
+    # vendor search
+    vendor_search_parser = vendor_subparsers.add_parser(
+        "search", help="Search vendors by name"
+    )
+    vendor_search_parser.add_argument("--name", required=True, help="Name pattern")
+    vendor_search_parser.set_defaults(func=cmd_vendor_search)
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -1832,6 +2354,18 @@ def main(argv: list[str] | None = None) -> int:
         not hasattr(args, "currency_command") or args.currency_command is None
     ):
         currency_parser.print_help()
+        return 0
+
+    if args.command == "expense" and (
+        not hasattr(args, "expense_command") or args.expense_command is None
+    ):
+        expense_parser.print_help()
+        return 0
+
+    if args.command == "vendor" and (
+        not hasattr(args, "vendor_command") or args.vendor_command is None
+    ):
+        vendor_parser.print_help()
         return 0
 
     result: int = args.func(args)
