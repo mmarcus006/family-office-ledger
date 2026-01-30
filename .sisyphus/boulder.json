@@ -1,6 +1,8 @@
 {
-  "active_plan": "/home/miller/projects/quicken/.sisyphus/plans/financial-features.md",
-  "started_at": "2026-01-29T06:21:00.000Z",
-  "session_ids": [],
-  "plan_name": "financial-features"
+  "active_plan": "/home/miller/projects/quicken/.sisyphus/plans/ownership-graph-data-model.md",
+  "started_at": "2026-01-29T20:39:45.450Z",
+  "session_ids": [
+    "ses_3f4c5729fffe7WRrpVD1X78kab"
+  ],
+  "plan_name": "ownership-graph-data-model"
 }
