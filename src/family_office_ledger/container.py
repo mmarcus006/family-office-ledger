@@ -83,13 +83,18 @@ class Container:
         return self._create_sqlite_database()
 
     def _create_sqlite_database(self) -> "LedgerRepository":
-        """Create and initialize SQLite database."""
+        """Create and initialize SQLite database.
+
+        Note: check_same_thread=False is required for FastAPI because
+        the database is created during lifespan startup but accessed
+        from worker threads handling requests.
+        """
         from family_office_ledger.repositories.sqlite import SQLiteDatabase
 
         db_path = str(self._settings.sqlite_path)
         logger.info("initializing_sqlite_database", path=db_path)
 
-        db = SQLiteDatabase(db_path)
+        db = SQLiteDatabase(db_path, check_same_thread=False)
         db.initialize()
         return db
 
