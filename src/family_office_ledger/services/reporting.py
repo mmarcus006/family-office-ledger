@@ -10,6 +10,7 @@ from typing import Any
 from uuid import UUID
 
 from family_office_ledger.domain.value_objects import AccountType, Money
+from family_office_ledger.logging_config import get_logger
 from family_office_ledger.repositories.interfaces import (
     AccountRepository,
     EntityOwnershipRepository,
@@ -27,6 +28,8 @@ from family_office_ledger.services.interfaces import (
     ReportingService,
 )
 from family_office_ledger.services.ownership_graph import OwnershipGraphService
+
+logger = get_logger(__name__)
 
 
 class ReportingServiceImpl(ReportingService):
@@ -83,7 +86,15 @@ class ReportingServiceImpl(ReportingService):
             converted = self._currency_service.convert(money, base_currency, as_of_date)
             return converted.amount
         except ExchangeRateNotFoundError:
-            # If no rate, return original (log warning in production)
+            # Log warning when exchange rate is not found and falling back to original amount
+            logger.warning(
+                "exchange_rate_not_found",
+                from_currency=from_currency,
+                to_currency=base_currency,
+                as_of_date=as_of_date.isoformat(),
+                amount=str(amount),
+                action="using_original_amount",
+            )
             return amount
 
     def net_worth_report(

@@ -593,7 +593,8 @@ class AuthorizationService:
         if entity_id is not None and not user.can_access_entity(entity_id):  # noqa: SIM103
             return False
 
-        # TODO: Check for entity-specific overrides from repository
+        # TODO(FOL-AUTH-001): Check for entity-specific permission overrides from repository
+        # This will allow entity-level RBAC overrides beyond role-based defaults
 
         return True
 
