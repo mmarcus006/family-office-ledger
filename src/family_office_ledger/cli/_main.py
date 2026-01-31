@@ -233,7 +233,8 @@ def cmd_ui(args: argparse.Namespace) -> int:
     port = int(args.port)
     api_url = str(args.api_url)
 
-    app_path = Path(__file__).parent / "streamlit_app" / "app.py"
+    # Go up from cli/ to family_office_ledger/ to find streamlit_app/
+    app_path = Path(__file__).parent.parent / "streamlit_app" / "app.py"
     if not app_path.exists():
         print(f"Error: Streamlit app not found at {app_path}")
         return 1
