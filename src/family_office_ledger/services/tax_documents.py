@@ -11,7 +11,7 @@ from io import StringIO
 from typing import Any
 from uuid import UUID
 
-from family_office_ledger.domain.value_objects import Money, Quantity
+from family_office_ledger.domain.value_objects import Money
 from family_office_ledger.repositories.interfaces import (
     EntityRepository,
     PositionRepository,

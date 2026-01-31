@@ -8,7 +8,7 @@ from typing import Any
 from uuid import UUID
 
 from family_office_ledger.domain.ownership import EntityOwnership
-from family_office_ledger.domain.value_objects import AccountType, Money
+from family_office_ledger.domain.value_objects import AccountType
 from family_office_ledger.repositories.interfaces import (
     AccountRepository,
     EntityOwnershipRepository,

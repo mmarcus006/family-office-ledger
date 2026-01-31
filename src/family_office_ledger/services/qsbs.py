@@ -9,14 +9,12 @@ from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
-from family_office_ledger.domain.entities import Position, Security
-from family_office_ledger.domain.transactions import TaxLot
+from family_office_ledger.domain.entities import Security
 from family_office_ledger.repositories.interfaces import (
     PositionRepository,
     SecurityRepository,
     TaxLotRepository,
 )
-
 
 QSBS_HOLDING_PERIOD_DAYS = 5 * 365  # 5 years for full exclusion
 QSBS_MAX_EXCLUSION = Decimal("10_000_000")  # $10M per issuer

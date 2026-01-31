@@ -10,7 +10,6 @@ This service:
 """
 
 from dataclasses import dataclass, field
-from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
@@ -20,7 +19,6 @@ from family_office_ledger.domain.value_objects import (
     AccountSubType,
     AccountType,
     AcquisitionType,
-    AssetClass,
     EntityType,
     LotSelection,
     Money,

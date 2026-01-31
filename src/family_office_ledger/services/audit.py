@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterable
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
