@@ -4,14 +4,13 @@ Provides light and dark themes with semantic color mappings.
 Each theme defines colors for backgrounds, text, borders, and components.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Final
 
 from family_office_ledger.design_system.tokens import (
     BORDER_RADIUS,
     COLORS,
-    FONT_SIZES,
     GLASS,
     SHADOWS,
     SPACING,

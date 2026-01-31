@@ -9,7 +9,6 @@ import streamlit as st
 
 from family_office_ledger.design_system import (
     COLORS,
-    DARK_THEME,
     LIGHT_THEME,
     Theme,
     get_theme,
@@ -17,7 +16,6 @@ from family_office_ledger.design_system import (
 from family_office_ledger.design_system.components import (
     CHART_COLORS,
     format_currency,
-    format_percentage,
     get_plotly_theme,
     get_value_color,
 )

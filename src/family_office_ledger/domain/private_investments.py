@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Self
 from uuid import UUID, uuid4
 
 from family_office_ledger.domain.value_objects import Money

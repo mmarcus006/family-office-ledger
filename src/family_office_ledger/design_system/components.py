@@ -4,11 +4,10 @@ Provides reusable component patterns and CSS generation utilities
 for building consistent UI components across different frontends.
 """
 
-from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from family_office_ledger.design_system.themes import Theme, get_theme
+from family_office_ledger.design_system.themes import get_theme
 from family_office_ledger.design_system.tokens import (
     BORDER_RADIUS,
     CHART_COLORS,

@@ -103,12 +103,14 @@ class TestStylesModule:
 
     def test_get_amount_color(self, mock_streamlit_env) -> None:
         """Test amount color determination."""
-        from family_office_ledger.streamlit_app.styles import COLORS, get_amount_color
+        from family_office_ledger.streamlit_app.styles import get_amount_color
+        from family_office_ledger.design_system import get_theme
 
-        assert get_amount_color(100) == COLORS["positive"]
-        assert get_amount_color(-100) == COLORS["negative"]
-        assert get_amount_color(0) == COLORS["text"]
-        assert get_amount_color("invalid") == COLORS["text"]
+        theme = get_theme()
+        assert get_amount_color(100) == theme.colors.gain
+        assert get_amount_color(-100) == theme.colors.loss
+        assert get_amount_color(0) == theme.colors.neutral
+        assert get_amount_color("invalid") == theme.colors.text
 
     def test_get_plotly_layout(self, mock_streamlit_env) -> None:
         """Test Plotly layout configuration."""
