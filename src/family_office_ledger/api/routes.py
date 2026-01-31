@@ -96,7 +96,11 @@ from family_office_ledger.domain.reconciliation import (
     ReconciliationMatchStatus,
     ReconciliationSession,
 )
-from family_office_ledger.domain.transactions import Entry, Transaction
+from family_office_ledger.domain.transactions import (
+    Entry,
+    Transaction,
+    UnbalancedTransactionError,
+)
 from family_office_ledger.domain.transfer_matching import (
     TransferMatch,
     TransferMatchingSession,
@@ -138,10 +142,7 @@ from family_office_ledger.services.currency import (
 )
 from family_office_ledger.services.expense import ExpenseServiceImpl
 from family_office_ledger.services.interfaces import LedgerService, ReportingService
-from family_office_ledger.services.ledger import (
-    LedgerServiceImpl,
-    UnbalancedTransactionError,
-)
+from family_office_ledger.services.ledger import LedgerServiceImpl
 from family_office_ledger.services.ownership_graph import (
     CycleDetectedError,
     OwnershipGraphService,

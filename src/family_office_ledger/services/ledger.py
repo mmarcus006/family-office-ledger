@@ -4,7 +4,11 @@ from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
-from family_office_ledger.domain.transactions import Entry, Transaction
+from family_office_ledger.domain.transactions import (
+    Entry,
+    Transaction,
+    UnbalancedTransactionError,
+)
 from family_office_ledger.domain.value_objects import Money
 from family_office_ledger.repositories.interfaces import (
     AccountRepository,
@@ -28,19 +32,6 @@ class TransactionNotFoundError(Exception):
     def __init__(self, txn_id: UUID) -> None:
         self.txn_id = txn_id
         super().__init__(f"Transaction not found: {txn_id}")
-
-
-class UnbalancedTransactionError(Exception):
-    """Raised when a transaction is not balanced (debits != credits)."""
-
-    def __init__(self, txn_id: UUID, debits: Money, credits: Money) -> None:
-        self.txn_id = txn_id
-        self.debits = debits
-        self.credits = credits
-        super().__init__(
-            f"Transaction {txn_id} is unbalanced: "
-            f"debits={debits.amount}, credits={credits.amount}"
-        )
 
 
 class LedgerServiceImpl(LedgerService):
@@ -88,7 +79,7 @@ class LedgerServiceImpl(LedgerService):
         # Check transaction is balanced
         if not txn.is_balanced:
             raise UnbalancedTransactionError(
-                txn.id, txn.total_debits, txn.total_credits
+                txn_id=txn.id, debits=txn.total_debits, credits=txn.total_credits
             )
 
     def reverse_transaction(

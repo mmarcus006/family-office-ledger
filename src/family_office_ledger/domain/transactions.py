@@ -11,7 +11,36 @@ def _utc_now() -> datetime:
 
 
 class UnbalancedTransactionError(Exception):
-    pass
+    """Raised when a transaction is not balanced (debits != credits)."""
+
+    def __init__(
+        self, message: str | None = None, txn_id: UUID | None = None, debits: Money | None = None, credits: Money | None = None
+    ) -> None:
+        """Initialize UnbalancedTransactionError.
+
+        Can be initialized with just a message string, or with transaction details.
+
+        Args:
+            message: Optional error message (used if txn_id not provided)
+            txn_id: Optional transaction ID
+            debits: Optional total debits amount
+            credits: Optional total credits amount
+        """
+        self.txn_id = txn_id
+        self.debits = debits
+        self.credits = credits
+
+        if txn_id is not None and debits is not None and credits is not None:
+            final_message = (
+                f"Transaction {txn_id} is unbalanced: "
+                f"debits={debits.amount}, credits={credits.amount}"
+            )
+        elif message:
+            final_message = message
+        else:
+            final_message = "Transaction is unbalanced"
+
+        super().__init__(final_message)
 
 
 class InsufficientQuantityError(Exception):
