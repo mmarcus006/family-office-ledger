@@ -3,8 +3,6 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-import pytest
-
 from family_office_ledger.domain.vendors import Vendor
 
 

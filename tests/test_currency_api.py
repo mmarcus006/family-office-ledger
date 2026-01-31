@@ -1,6 +1,5 @@
 """Tests for currency API endpoints."""
 
-from datetime import date
 
 import pytest
 from httpx import Client

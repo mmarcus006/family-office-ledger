@@ -1,10 +1,8 @@
 """Tests for ReconciliationService implementation."""
 
-import tempfile
-from datetime import date, datetime, timezone
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from uuid import UUID, uuid4
 
 import pytest
 
@@ -22,7 +20,7 @@ from family_office_ledger.repositories.sqlite import (
     SQLiteEntityRepository,
     SQLiteTransactionRepository,
 )
-from family_office_ledger.services.interfaces import MatchResult, ReconciliationSummary
+from family_office_ledger.services.interfaces import ReconciliationSummary
 from family_office_ledger.services.reconciliation import ReconciliationServiceImpl
 
 

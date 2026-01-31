@@ -11,7 +11,6 @@ import pytest
 from family_office_ledger.domain.value_objects import ExpenseCategory, TransactionType
 from family_office_ledger.parsers.bank_parsers import ParsedTransaction
 from family_office_ledger.services.transaction_classifier import (
-    SecurityLookup,
     TransactionClassifier,
 )
 

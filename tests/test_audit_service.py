@@ -1,6 +1,5 @@
 """Tests for audit trail service."""
 
-from datetime import date, datetime
 from uuid import uuid4
 
 import pytest
@@ -8,7 +7,6 @@ import pytest
 from family_office_ledger.domain.audit import (
     AuditAction,
     AuditEntityType,
-    AuditEntry,
 )
 from family_office_ledger.repositories.sqlite import SQLiteDatabase
 from family_office_ledger.services.audit import AuditService

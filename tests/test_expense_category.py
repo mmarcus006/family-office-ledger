@@ -1,6 +1,5 @@
 """Tests for ExpenseCategory enum."""
 
-import pytest
 
 from family_office_ledger.domain.value_objects import ExpenseCategory
 

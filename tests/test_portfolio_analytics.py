@@ -2,7 +2,6 @@
 
 from datetime import date
 from decimal import Decimal
-from uuid import uuid4
 
 import pytest
 
@@ -23,7 +22,6 @@ from family_office_ledger.repositories.sqlite import (
     SQLiteSecurityRepository,
 )
 from family_office_ledger.services.portfolio_analytics import (
-    AssetAllocation,
     PortfolioAnalyticsService,
 )
 

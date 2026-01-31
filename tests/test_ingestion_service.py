@@ -19,7 +19,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from family_office_ledger.domain.entities import Account, Entity, Position, Security
-from family_office_ledger.domain.transactions import Entry, TaxLot, Transaction
+from family_office_ledger.domain.transactions import TaxLot, Transaction
 from family_office_ledger.domain.value_objects import (
     AccountSubType,
     AccountType,
@@ -40,9 +40,6 @@ from family_office_ledger.repositories.interfaces import (
     TransactionRepository,
 )
 from family_office_ledger.services.ingestion import (
-    ENTITY_PATTERNS,
-    STANDARD_ACCOUNTS,
-    SYSTEM_ENTITY_NAME,
     IngestionResult,
     IngestionService,
 )
@@ -52,7 +49,6 @@ from family_office_ledger.services.interfaces import (
     LotMatchingService,
 )
 from family_office_ledger.services.transaction_classifier import TransactionClassifier
-
 
 # =============================================================================
 # Mock Repository Implementations
@@ -1744,7 +1740,7 @@ class TestRealFileIntegration:
 
         # Print summary
         print(f"\n{'=' * 60}")
-        print(f"CITI File Ingestion Summary")
+        print("CITI File Ingestion Summary")
         print(f"{'=' * 60}")
         print(f"File: {file_path}")
         print(f"Transactions ingested: {result.transaction_count}")
@@ -1754,14 +1750,14 @@ class TestRealFileIntegration:
         print(f"Errors: {len(result.errors)}")
 
         if result.type_breakdown:
-            print(f"\nTransaction Type Breakdown:")
+            print("\nTransaction Type Breakdown:")
             for txn_type, count in sorted(
                 result.type_breakdown.items(), key=lambda x: x[1], reverse=True
             ):
                 print(f"  {txn_type.value}: {count}")
 
         if result.errors:
-            print(f"\nErrors encountered:")
+            print("\nErrors encountered:")
             for error in result.errors[:5]:  # Show first 5 errors
                 print(f"  - {error}")
 
@@ -1813,7 +1809,7 @@ class TestRealFileIntegration:
 
         # Print summary
         print(f"\n{'=' * 60}")
-        print(f"UBS File Ingestion Summary")
+        print("UBS File Ingestion Summary")
         print(f"{'=' * 60}")
         print(f"File: {file_path}")
         print(f"Transactions ingested: {result.transaction_count}")
@@ -1823,14 +1819,14 @@ class TestRealFileIntegration:
         print(f"Errors: {len(result.errors)}")
 
         if result.type_breakdown:
-            print(f"\nTransaction Type Breakdown:")
+            print("\nTransaction Type Breakdown:")
             for txn_type, count in sorted(
                 result.type_breakdown.items(), key=lambda x: x[1], reverse=True
             ):
                 print(f"  {txn_type.value}: {count}")
 
         if result.errors:
-            print(f"\nErrors encountered:")
+            print("\nErrors encountered:")
             for error in result.errors[:5]:  # Show first 5 errors
                 print(f"  - {error}")
 
@@ -1882,7 +1878,7 @@ class TestRealFileIntegration:
 
         # Print summary
         print(f"\n{'=' * 60}")
-        print(f"Morgan Stanley File Ingestion Summary")
+        print("Morgan Stanley File Ingestion Summary")
         print(f"{'=' * 60}")
         print(f"File: {file_path}")
         print(f"Transactions ingested: {result.transaction_count}")
@@ -1892,14 +1888,14 @@ class TestRealFileIntegration:
         print(f"Errors: {len(result.errors)}")
 
         if result.type_breakdown:
-            print(f"\nTransaction Type Breakdown:")
+            print("\nTransaction Type Breakdown:")
             for txn_type, count in sorted(
                 result.type_breakdown.items(), key=lambda x: x[1], reverse=True
             ):
                 print(f"  {txn_type.value}: {count}")
 
         if result.errors:
-            print(f"\nErrors encountered:")
+            print("\nErrors encountered:")
             for error in result.errors[:5]:  # Show first 5 errors
                 print(f"  - {error}")
 

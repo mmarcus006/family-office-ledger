@@ -3,7 +3,6 @@ from decimal import Decimal
 from uuid import uuid4
 
 from family_office_ledger.cli import main
-from family_office_ledger.domain.budgets import BudgetPeriodType
 from family_office_ledger.domain.entities import Account, Entity
 from family_office_ledger.domain.value_objects import (
     AccountSubType,

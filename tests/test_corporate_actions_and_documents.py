@@ -2,8 +2,6 @@ from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
-import pytest
-
 from family_office_ledger.domain.corporate_actions import CorporateAction, Price
 from family_office_ledger.domain.documents import Document, TaxDocLine
 from family_office_ledger.domain.value_objects import (

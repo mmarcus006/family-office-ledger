@@ -1,8 +1,6 @@
 from datetime import date
 from decimal import Decimal
 
-import pytest
-
 from family_office_ledger.domain.entities import Account, Entity, Position, Security
 from family_office_ledger.domain.value_objects import (
     AccountSubType,

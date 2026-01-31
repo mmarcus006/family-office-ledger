@@ -25,9 +25,9 @@ from family_office_ledger.repositories.sqlite import (
     SQLiteTaxLotRepository,
 )
 from family_office_ledger.services.qsbs import (
+    QSBS_HOLDING_PERIOD_DAYS,
     QSBSService,
     SecurityNotFoundError,
-    QSBS_HOLDING_PERIOD_DAYS,
 )
 
 

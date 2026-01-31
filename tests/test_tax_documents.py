@@ -1,6 +1,6 @@
 """Tests for tax document service."""
 
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
@@ -33,7 +33,6 @@ from family_office_ledger.services.tax_documents import (
     Form8949Part,
     ScheduleD,
     TaxDocumentService,
-    TaxDocumentSummary,
 )
 
 

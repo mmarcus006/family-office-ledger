@@ -1,9 +1,6 @@
 """Tests for CLI module."""
 
-import tempfile
 from pathlib import Path
-
-import pytest
 
 from family_office_ledger.cli import (
     cmd_init,

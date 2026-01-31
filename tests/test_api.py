@@ -1,29 +1,12 @@
 """Tests for FastAPI endpoints."""
 
-from datetime import date
-from decimal import Decimal
-from uuid import UUID
 
 import pytest
 from httpx import Client
 
 from family_office_ledger.api.app import create_app, get_db
-from family_office_ledger.domain.entities import Account, Entity
-from family_office_ledger.domain.transactions import Entry, Transaction
-from family_office_ledger.domain.value_objects import (
-    AccountSubType,
-    AccountType,
-    EntityType,
-    Money,
-)
 from family_office_ledger.repositories.sqlite import (
-    SQLiteAccountRepository,
     SQLiteDatabase,
-    SQLiteEntityRepository,
-    SQLitePositionRepository,
-    SQLiteSecurityRepository,
-    SQLiteTaxLotRepository,
-    SQLiteTransactionRepository,
 )
 
 

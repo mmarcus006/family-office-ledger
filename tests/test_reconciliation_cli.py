@@ -22,7 +22,6 @@ from family_office_ledger.domain.reconciliation import (
     ReconciliationMatch,
     ReconciliationMatchStatus,
     ReconciliationSession,
-    ReconciliationSessionStatus,
 )
 from family_office_ledger.domain.value_objects import AccountType, EntityType
 from family_office_ledger.repositories.sqlite import (

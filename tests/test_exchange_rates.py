@@ -1,6 +1,6 @@
 """Tests for ExchangeRate domain model."""
 
-from datetime import date, datetime, UTC
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from uuid import UUID
 

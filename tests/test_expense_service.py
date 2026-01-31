@@ -4,13 +4,11 @@ from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
-from dateutil.relativedelta import relativedelta
-
 import pytest
+from dateutil.relativedelta import relativedelta
 
 from family_office_ledger.domain.entities import Account, Entity
 from family_office_ledger.domain.transactions import Entry, Transaction
-from family_office_ledger.domain.vendors import Vendor
 from family_office_ledger.domain.value_objects import (
     AccountSubType,
     AccountType,
@@ -18,6 +16,7 @@ from family_office_ledger.domain.value_objects import (
     ExpenseCategory,
     Money,
 )
+from family_office_ledger.domain.vendors import Vendor
 from family_office_ledger.repositories.sqlite import (
     SQLiteAccountRepository,
     SQLiteDatabase,

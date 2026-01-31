@@ -6,13 +6,11 @@ from uuid import uuid4
 
 import pytest
 
-from family_office_ledger.domain.entities import Entity
-from family_office_ledger.domain.ownership import EntityOwnership, SelfOwnershipError
-from family_office_ledger.domain.value_objects import EntityType
-from family_office_ledger.domain.entities import Account
+from family_office_ledger.domain.entities import Account, Entity
 from family_office_ledger.domain.households import Household, HouseholdMember
+from family_office_ledger.domain.ownership import EntityOwnership, SelfOwnershipError
 from family_office_ledger.domain.transactions import Entry, Transaction
-from family_office_ledger.domain.value_objects import AccountType, Money
+from family_office_ledger.domain.value_objects import AccountType, EntityType, Money
 from family_office_ledger.repositories.sqlite import (
     SQLiteAccountRepository,
     SQLiteDatabase,

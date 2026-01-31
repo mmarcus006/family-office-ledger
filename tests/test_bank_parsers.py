@@ -1,6 +1,5 @@
 """Tests for bank-specific parsers (CITI, UBS, Morgan Stanley)."""
 
-import tempfile
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -8,14 +7,12 @@ from pathlib import Path
 import pytest
 
 from family_office_ledger.parsers.bank_parsers import (
-    BankParser,
     BankParserFactory,
     CitiParser,
     MorganStanleyParser,
     ParsedTransaction,
     UBSParser,
 )
-
 
 # ===== ParsedTransaction Tests =====
 
@@ -681,7 +678,7 @@ class TestMorganStanleyParser:
         result = parser.parse(str(xlsx_file))
 
         assert "\n" not in result[0].description
-        assert "Line1 Line2 Line3" == result[0].description
+        assert result[0].description == "Line1 Line2 Line3"
 
     def test_ms_stores_raw_data(self, tmp_path: Path) -> None:
         """Parsed transaction includes raw row data."""
