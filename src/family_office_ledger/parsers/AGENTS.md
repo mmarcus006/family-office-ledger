@@ -1,3 +1,6 @@
+<!-- Parent: ../AGENTS.md -->
+<!-- Generated: 2026-01-29 | Updated: 2026-01-31 -->
+
 # PARSERS LAYER
 
 ## OVERVIEW

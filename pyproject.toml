@@ -131,6 +131,7 @@ exclude_lines = [
 
 [dependency-groups]
 dev = [
+    "selenium>=4.40.0",
     "types-openpyxl>=3.1.5.20250919",
 ]
 

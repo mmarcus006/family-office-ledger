@@ -84,6 +84,46 @@ def apply_custom_css(theme: Theme | None = None) -> None:
     #MainMenu {{visibility: hidden;}}
     footer {{visibility: hidden;}}
 
+    /* =================================================================
+       Sidebar - Always Visible
+       ================================================================= */
+
+    /* Ensure sidebar is always expanded and visible */
+    [data-testid="stSidebar"] {{
+        min-width: 280px !important;
+        max-width: 320px !important;
+    }}
+
+    /* Prevent sidebar collapse button from hiding sidebar completely */
+    [data-testid="stSidebar"][aria-expanded="false"] {{
+        min-width: 280px !important;
+        margin-left: 0 !important;
+        transform: none !important;
+    }}
+
+    /* Hide the collapse button to prevent accidental collapse */
+    [data-testid="collapsedControl"] {{
+        display: none !important;
+    }}
+
+    /* =================================================================
+       Top Navigation Bar
+       ================================================================= */
+
+    .top-nav-container {{
+        background-color: {colors.surface};
+        border-bottom: 1px solid {colors.border};
+        padding: {SPACING['2']} {SPACING['4']};
+        margin-bottom: {SPACING['4']};
+        border-radius: {BORDER_RADIUS['md']};
+    }}
+
+    .top-nav-filter {{
+        display: inline-flex;
+        align-items: center;
+        gap: {SPACING['2']};
+    }}
+
     /* Base typography */
     html, body, [class*="st-"] {{
         font-family: var(--font-sans);
